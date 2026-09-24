@@ -1,0 +1,36 @@
+# Per-client install:
+#   1. cp secrets.env.example secrets.env   (git-ignored) and fill it in
+#   2. edit portal.env (non-secret settings) and the images below
+#   3. kubectl apply -k deploy/kubernetes   (add -n <namespace> as needed)
+#   4. kubectl logs deploy/dbt-portal-backend   -> preflight output + seed passwords
+#
+# Full walkthrough: docs/ONBOARDING.md
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: dbt-portal
+
+resources:
+  - namespace.yaml
+  - backend.yaml
+  - frontend.yaml
+  - ingress.yaml
+
+configMapGenerator:
+  - name: dbt-portal-config
+    envs:
+      - portal.env
+
+secretGenerator:
+  - name: dbt-portal-secrets
+    envs:
+      - secrets.env
+
+# Images pushed to the client's registry (see docs/ONBOARDING.md, step 3).
+images:
+  - name: capgemini-dbt-portal-backend
+    newName: REGISTRY/capgemini-dbt-portal-backend
+    newTag: "1.0.0"
+  - name: capgemini-dbt-portal-frontend
+    newName: REGISTRY/capgemini-dbt-portal-frontend
+    newTag: "1.0.0"

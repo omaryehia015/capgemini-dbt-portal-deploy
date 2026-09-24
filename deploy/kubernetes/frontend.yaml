@@ -1,0 +1,39 @@
+# nginx serving the SPA and proxying /api (incl. WebSocket) to the backend.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbt-portal-frontend
+  labels: { app: dbt-portal, component: frontend }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dbt-portal, component: frontend }
+  template:
+    metadata:
+      labels: { app: dbt-portal, component: frontend }
+    spec:
+      containers:
+        - name: frontend
+          image: capgemini-dbt-portal-frontend
+          ports:
+            - containerPort: 8080
+          env:
+            - name: BACKEND_UPSTREAM
+              value: dbt-portal-backend:8000
+          readinessProbe:
+            httpGet: { path: /, port: 8080 }
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dbt-portal-frontend
+  labels: { app: dbt-portal, component: frontend }
+spec:
+  selector: { app: dbt-portal, component: frontend }
+  ports:
+    - port: 8080
+      targetPort: 8080

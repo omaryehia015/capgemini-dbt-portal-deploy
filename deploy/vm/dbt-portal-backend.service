@@ -1,0 +1,24 @@
+# systemd unit for the backend on a Linux VM without containers.
+#   sudo cp deploy/vm/dbt-portal-backend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now dbt-portal-backend
+#   journalctl -u dbt-portal-backend -f
+#
+# Assumes the repo at /opt/dbt-portal with a venv in backend/.venv, a service
+# user `dbtportal` that can write the dbt project folder, and settings in
+# /etc/dbt-portal/portal.env (see docs/ONBOARDING.md, path D).
+[Unit]
+Description=dbt Portal backend (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=dbtportal
+WorkingDirectory=/opt/dbt-portal/backend
+EnvironmentFile=/etc/dbt-portal/portal.env
+# "-": report problems in the journal but still start (like the container default).
+ExecStartPre=-/opt/dbt-portal/backend/.venv/bin/python -m app.preflight
+ExecStart=/opt/dbt-portal/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

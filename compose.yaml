@@ -1,0 +1,64 @@
+# Production-like stack: nginx (SPA + reverse proxy) -> FastAPI backend.
+# Only the frontend port is published; the backend is reachable solely over
+# the internal network, same as it would be behind an ingress.
+#
+#   podman compose up --build -d
+#   http://localhost:8080
+#
+# Client onboarding (project source, profiles, adapters): docs/ONBOARDING.md
+services:
+  backend:
+    build:
+      context: ./backend
+      args:
+        # Other warehouses / a pinned dbt version, e.g. "dbt-bigquery~=1.8.0".
+        EXTRA_PIP_PACKAGES: ${EXTRA_PIP_PACKAGES:-}
+    image: capgemini-dbt-portal-backend:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DBT_PROJECT_DIR: /workspace
+      # Leave unset and the entrypoint generates one on first start and
+      # persists it on the portal_data volume (same secret across restarts,
+      # so sessions survive them) -- set it explicitly to pin/rotate it.
+      JWT_SECRET: ${JWT_SECRET:-}
+      # "development" seeds documented default passwords; any other value
+      # generates random ones (printed once in the backend log).
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    volumes:
+      # The client dbt project the portal runs dbt against. dbt writes
+      # target/, logs/ and dbt_packages/ into it, so it is mounted read-write.
+      # With DBT_PROJECT_PATH unset this is the named volume `workspace`, which
+      # the entrypoint fills from DBT_PROJECT_GIT_URL (git mode).
+      - ${DBT_PROJECT_PATH:-workspace}:/workspace
+      # Users, roles, audit log and run history (SQLite). Survives rebuilds.
+      # Set DATABASE_URL in .env to use PostgreSQL instead.
+      - portal_data:/data
+    expose:
+      - "8000"
+    # Declared here rather than only in the Dockerfile: Podman builds OCI
+    # images by default, and OCI images silently drop HEALTHCHECK, which
+    # would make `depends_on: service_healthy` below never resolve.
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      # Git mode clones (and optionally runs dbt deps) before uvicorn starts.
+      start_period: 120s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+    image: capgemini-dbt-portal-frontend:local
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${PORTAL_PORT:-8080}:8080"
+
+volumes:
+  portal_data:
+  workspace:

@@ -1,0 +1,25 @@
+# Example for ingress-nginx. Adjust host, TLS and class to the client cluster;
+# the long timeouts keep dbt log WebSockets open for long-running jobs.
+# No ingress? `kubectl port-forward svc/dbt-portal-frontend 8080:8080`.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dbt-portal
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: dbt-portal.CLIENT-DOMAIN
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dbt-portal-frontend
+                port: { number: 8080 }
+  # tls:
+  #   - hosts: [dbt-portal.CLIENT-DOMAIN]
+  #     secretName: dbt-portal-tls

@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Editors / OS
+.vscode/
+.DS_Store
+*.log
+
+# Deploy secrets
+deploy/kubernetes/secrets.env
+deploy/client/.env
