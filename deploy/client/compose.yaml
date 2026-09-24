@@ -10,6 +10,11 @@ services:
   backend:
     image: ${IMAGE_REGISTRY:-ghcr.io/OWNER/REPO}-backend:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    # Non-root by default. Windows/macOS bind mounts (Podman/Docker Desktop) show
+    # every file as root-owned and refuse chmod/utime from other users, which
+    # makes `dbt deps` fail ("Operation not permitted"). scripts/onboard sets
+    # PORTAL_USER=0:0 on those hosts; leave it alone on Linux.
+    user: "${PORTAL_USER:-10001:10001}"
     environment:
       DBT_PROJECT_DIR: /workspace
       # Random per-account passwords, generated on first start and printed

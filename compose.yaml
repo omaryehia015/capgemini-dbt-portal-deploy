@@ -15,6 +15,11 @@ services:
         EXTRA_PIP_PACKAGES: ${EXTRA_PIP_PACKAGES:-}
     image: capgemini-dbt-portal-backend:local
     restart: unless-stopped
+    # Non-root by default. Windows/macOS bind mounts (Podman/Docker Desktop) show
+    # every file as root-owned and refuse chmod/utime from other users, which
+    # makes `dbt deps` fail ("Operation not permitted"). scripts/onboard sets
+    # PORTAL_USER=0:0 on those hosts; leave it alone on Linux.
+    user: "${PORTAL_USER:-10001:10001}"
     env_file:
       - .env
     environment:

@@ -19,6 +19,48 @@ project mount, `docker compose up -d`. This doc is for *you*: how those
 images get built and how to wire them into whatever infrastructure a
 particular client already has.
 
+## Fastest path: the onboarding script + guided wizard
+
+For a laptop or a single VM there are two steps, and no file editing:
+
+```powershell
+# Windows
+.\scripts\onboard.ps1 -ProjectPath ..\my-dbt-project
+```
+
+```bash
+# Linux / macOS / WSL
+scripts/onboard.sh --project ../my-dbt-project
+```
+
+The script checks the container runtime and the dbt project, writes
+`deploy/client/.env` (a *relative* project path, which Podman on Windows
+requires), pulls and starts the two images, waits for them to be healthy and
+prints the generated sign-in details. It sets `PORTAL_USER=0:0` on Windows
+mounts, where a non-root container cannot `chmod` files and `dbt deps` would
+fail; on Linux the image's non-root user is kept.
+
+Then sign in and open **Onboarding** in the sidebar. It judges each step from
+real state (files on disk and the warehouse), so it is accurate however the
+project got there, and every step is idempotent:
+
+| Step | Done when | What running it does |
+|---|---|---|
+| Connect | project, profile, credentials and dbt are present | `dbt debug` (logs in to the warehouse) |
+| Install packages | every package in `package-lock.yml` is in `dbt_packages/` | `dbt deps` |
+| Provision database | the metadata database has every package schema | `dbt run-operation grant_package_access` |
+| Build observability | Elementary tables exist | `dbt run -s elementary` (+ FinOps if installed) |
+| Generate reports | docs, Colibri and Elementary report exist | docs + Colibri + `edr report` |
+
+*Provision* needs a role that may create databases and grant privileges, so it
+is limited to users with `governance.manage` (the Admin role). If the project's
+own role can't do that, the step accepts a one-off login (user, password, role)
+that goes into that job's environment only and is never stored, logged or
+audited; the grants still go to the role dbt normally runs as.
+
+The sections below are for infrastructure the script doesn't cover
+(Kubernetes, baked images, bare VMs).
+
 Read order: [1. What "onboarding" means here](#1-what-onboarding-means-here) →
 pick your path in [2](#2-pick-a-deployment-path) → do the steps in that
 path's section → [6. Every environment variable](#6-every-environment-variable-reference)
