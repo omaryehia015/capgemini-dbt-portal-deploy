@@ -19,47 +19,51 @@ project mount, `docker compose up -d`. This doc is for *you*: how those
 images get built and how to wire them into whatever infrastructure a
 particular client already has.
 
-## Fastest path: the onboarding script + guided wizard
+## Fastest path: one script
 
-For a laptop or a single VM there are two steps, and no file editing:
-
-```powershell
-# Windows
-.\scripts\onboard.ps1 -ProjectPath ..\my-dbt-project
-```
+The client-side script lives in the dbt package, not in this repo:
+[capgemini_dbt_core/scripts/portal.py](https://github.com/omaryehia015/capgemini_dbt_core/blob/main/scripts/portal.py).
+It is one file (Python 3.8+, standard library only) and behaves the same on Windows, macOS
+and Linux. The client needs Docker or Podman and nothing else, because dbt runs inside this
+image. Once the package is installed, the script is also at
+`dbt_packages/capgemini_dbt_core/scripts/portal.py`.
 
 ```bash
-# Linux / macOS / WSL
-scripts/onboard.sh --project ../my-dbt-project
+python portal.py onboard     # from the dbt project folder, or with --project <folder>
+python portal.py refresh     # daily upkeep; onboard schedules it (Task Scheduler / cron)
+python portal.py status      # project, URL, schedule, last refresh, onboarding steps
+python portal.py stop        # stop this project's portal and its schedule (data is kept)
 ```
 
-The script checks the container runtime and the dbt project, writes
-`deploy/client/.env` (a *relative* project path, which Podman on Windows
-requires), pulls and starts the two images, waits for them to be healthy and
-prints the generated sign-in details. It sets `PORTAL_USER=0:0` on Windows
-mounts, where a non-root container cannot `chmod` files and `dbt deps` would
-fail; on Linux the image's non-root user is kept.
+`onboard` finds the dbt project, including a sub-folder of a monorepo, and its
+`profiles.yml`, including `~/.dbt` and `DBT_PROFILES_DIR`, which it mounts read-only at
+`/profiles`. It adds `capgemini_dbt_core` to `packages.yml` if it is missing and writes
+missing credentials to the project's `.env`. Then it pulls the images and starts a portal
+instance just for that project, with its own containers, volume and a free port. It
+confirms that `/api/onboarding/status` reports the same `project_name`, runs the steps below
+through the API and schedules `refresh`. Proxies (`HTTP(S)_PROXY`), a corporate CA
+(`--ca-cert`), mirrors (`--registry`/`--tag`) and offline machines (`--no-pull`) are
+covered. The backend runs as root inside the container because Windows/macOS bind mounts
+and rootless Podman need it for `dbt deps`. On Linux with rootful Docker, the script hands
+the files dbt wrote back to the project owner.
 
-Then sign in and open **Onboarding** in the sidebar. It judges each step from
-real state (files on disk and the warehouse), so it is accurate however the
-project got there, and every step is idempotent:
+The script uses only the API (`/api/auth/*`, `/api/onboarding/*`, `/api/jobs/*`) and the
+container contract (`DBT_PROJECT_DIR`, `DBT_PROFILES_DIR`, `/data`, the
+`GENERATED INITIAL CREDENTIALS` log banner). Changing any of these breaks client installs,
+so update the script in capgemini_dbt_core at the same time.
+
+The same steps are available later in the portal's **Onboarding** page:
 
 | Step | Done when | What running it does |
 |---|---|---|
 | Connect | project, profile, credentials and dbt are present | `dbt debug` (logs in to the warehouse) |
-| Install packages | every package in `package-lock.yml` is in `dbt_packages/` | `dbt deps` |
+| Install packages | every package in `package-lock.yml` is in `dbt_packages/` | `dbt deps` (retries transient mount errors) |
 | Provision database | the metadata database has every package schema | `dbt run-operation grant_package_access` |
 | Build observability | Elementary tables exist | `dbt run -s elementary` (+ FinOps if installed) |
 | Generate reports | docs, Colibri and Elementary report exist | docs + Colibri + `edr report` |
 
-*Provision* needs a role that may create databases and grant privileges, so it
-is limited to users with `governance.manage` (the Admin role). If the project's
-own role can't do that, the step accepts a one-off login (user, password, role)
-that goes into that job's environment only and is never stored, logged or
-audited; the grants still go to the role dbt normally runs as.
-
-The sections below are for infrastructure the script doesn't cover
-(Kubernetes, baked images, bare VMs).
+*Provision* is limited to users with `governance.manage` (the Admin role). The sections below are for
+infrastructure the script doesn't cover (Kubernetes, baked images, bare VMs).
 
 Read order: [1. What "onboarding" means here](#1-what-onboarding-means-here) →
 pick your path in [2](#2-pick-a-deployment-path) → do the steps in that
