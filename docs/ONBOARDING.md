@@ -59,7 +59,7 @@ The same steps are available later in the portal's **Onboarding** page:
 | Connect | project, profile, credentials and dbt are present | `dbt debug` (logs in to the warehouse) |
 | Install packages | every package in `package-lock.yml` is in `dbt_packages/` | `dbt deps` (retries transient mount errors) |
 | Provision database | the metadata database has every package schema | `dbt run-operation grant_package_access` |
-| Build observability | Elementary tables exist | `dbt run -s elementary` (+ FinOps if installed) |
+| Build observability | Elementary tables exist | `dbt run -s elementary` (+ FinOps if installed), then `dbt test --select package:<project>` (failures don't fail the step) |
 | Generate reports | docs, Colibri and Elementary report exist | docs + Colibri + `edr report` |
 
 *Provision* is limited to users with `governance.manage` (the Admin role). The sections below are for
