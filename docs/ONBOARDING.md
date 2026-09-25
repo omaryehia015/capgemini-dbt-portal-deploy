@@ -21,40 +21,36 @@ particular client already has.
 
 ## Fastest path: one script
 
-[scripts/onboard.py](../scripts/onboard.py) is a single self-contained file (Python 3.8+,
-standard library only) that runs the same on Windows, macOS and Linux. Copy it to the client
-machine; the client needs Docker or Podman and nothing else (dbt runs inside the portal image).
+The client-side script lives in the dbt package, not in this repo:
+[capgemini_dbt_core/scripts/portal.py](https://github.com/omaryehia015/capgemini_dbt_core/blob/main/scripts/portal.py).
+It is one file (Python 3.8+, standard library only) and behaves the same on Windows, macOS
+and Linux. The client needs Docker or Podman and nothing else, because dbt runs inside this
+image. Once the package is installed, the script is also at
+`dbt_packages/capgemini_dbt_core/scripts/portal.py`.
 
 ```bash
-python onboard.py --project /path/to/client-dbt-project --core-ref v1.0.0
+python portal.py onboard     # from the dbt project folder, or with --project <folder>
+python portal.py refresh     # daily upkeep; onboard schedules it (Task Scheduler / cron)
+python portal.py status      # project, URL, schedule, last refresh, onboarding steps
+python portal.py stop        # stop this project's portal and its schedule (data is kept)
 ```
 
-It does, in order, and every step is safe to repeat:
+`onboard` finds the dbt project, including a sub-folder of a monorepo, and its
+`profiles.yml`, including `~/.dbt` and `DBT_PROFILES_DIR`, which it mounts read-only at
+`/profiles`. It adds `capgemini_dbt_core` to `packages.yml` if it is missing and writes
+missing credentials to the project's `.env`. Then it pulls the images and starts a portal
+instance just for that project, with its own containers, volume and a free port. It
+confirms that `/api/onboarding/status` reports the same `project_name`, runs the steps below
+through the API and schedules `refresh`. Proxies (`HTTP(S)_PROXY`), a corporate CA
+(`--ca-cert`), mirrors (`--registry`/`--tag`) and offline machines (`--no-pull`) are
+covered. The backend runs as root inside the container because Windows/macOS bind mounts
+and rootless Podman need it for `dbt deps`. On Linux with rootful Docker, the script hands
+the files dbt wrote back to the project owner.
 
-1. **Checks** the container runtime and the dbt project.
-2. **Saves the current packages**: `packages.yml`, `package-lock.yml` and the installed-package list go to
-   `<project>/.capgemini-onboarding/backups/<time>/` (credentials in the copy are redacted;
-   `--restore` puts the files back).
-3. **Adds `capgemini_dbt_core` to `packages.yml`**, keeping the client's other packages. The access
-   token is read from `env_var('DBT_ENV_SECRET_GIT_CREDENTIAL')` and never written into the file
-   (an existing `https://TOKEN@...` URL is migrated). dbt scrubs `DBT_ENV_SECRET_*` values from its
-   logs; a plainly named variable would be printed in clear text in the stored job logs.
-4. **Collects the environment variables** into the project's `.env`: keeps what is there, asks for what
-   is missing (password hidden), restricts the file to its owner (POSIX) and keeps it and the backups
-   out of git.
-5. **Pulls the images** (asking for a `read:packages` token if the registry refuses) using a throwaway
-   login that is deleted afterwards, then runs **`dbt deps` inside the image**.
-6. **Starts the portal** and waits for it to be healthy.
-7. **Runs the Onboarding steps one by one** through the portal's API, streaming each log: connect,
-   packages, provision the metadata database, build the Elementary/FinOps models, generate the
-   reports. If provisioning needs more privilege than the dbt role has, it asks for a one-off admin
-   login (used once, never stored). It ends with the sign-in details and a summary of the tables it found.
-
-Other modes: `--restore`, `--down` (stop, keep data), `--status`, `--yes` (never prompt; everything
-from the `.env` or `ONBOARD_ADMIN_PASSWORD` for an existing install), `--tag`, `--registry`,
-`--no-pull`, `--port`. Containers run as root inside the container on every platform: Windows and
-macOS bind mounts refuse `chmod` for other users, which breaks `dbt deps`, and rootless Podman maps
-root to the invoking user.
+The script uses only the API (`/api/auth/*`, `/api/onboarding/*`, `/api/jobs/*`) and the
+container contract (`DBT_PROJECT_DIR`, `DBT_PROFILES_DIR`, `/data`, the
+`GENERATED INITIAL CREDENTIALS` log banner). Changing any of these breaks client installs,
+so update the script in capgemini_dbt_core at the same time.
 
 The same steps are available later in the portal's **Onboarding** page:
 
