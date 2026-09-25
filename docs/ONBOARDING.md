@@ -435,6 +435,7 @@ and `backend/app/services/snowflake.py` are the source of truth.
 | `COLIBRI_DIST_DIR` | auto-discovered | Override where the Colibri static report is found. |
 | `PREFLIGHT_ON_START` | `true` | Set `false` to skip the entrypoint's preflight checks entirely. |
 | `PREFLIGHT_STRICT` | `false` | `true` refuses to start the container when preflight finds a failure (vs. warning and starting anyway). |
+| `PORTAL_CA_CERTS` | `<project>/.certs/` | Corporate root CA(s) for a proxy that inspects TLS (Zscaler, Netskope...): a PEM file or a folder of `*.pem`/`*.crt`. The entrypoint adds them to the public roots and points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` at the merged bundle. Symptom without it: `CERTIFICATE_VERIFY_FAILED ... self-signed certificate in certificate chain` from the AI providers or `dbt deps`. An explicit `SSL_CERT_FILE` wins. |
 
 ## 7. Verify the install
 
