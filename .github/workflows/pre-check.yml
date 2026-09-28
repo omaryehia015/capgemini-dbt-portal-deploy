@@ -1,0 +1,179 @@
+# Pull Request Pre-Check: every PR into dev, uat or main must pass these before merge.
+#
+#   secret-scan              gitleaks over the PR's commits
+#   validate-promotion-path  feature/* | fix/* | ... -> dev -> uat -> main, nothing else
+#   python-validation        backend: ruff lint + format, every module imports
+#   frontend-validation      frontend: npm ci, eslint, tsc + vite build
+#
+# Image builds are checked separately by publish-images.yml, which also runs on these PRs.
+# Make these jobs required status checks in the branch protection rules for dev, uat and main.
+name: Pull Request Pre-Check
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - uat
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+concurrency:
+  group: pre-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  validate-promotion-path:
+    name: Validate Promotion Path
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Validate source and destination branches
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          echo "Source branch: ${HEAD_BRANCH}"
+          echo "Target branch: ${BASE_BRANCH}"
+          case "${BASE_BRANCH}" in
+            dev)
+              case "${HEAD_BRANCH}" in
+                feature/*|feat/*|bugfix/*|fix/*|hotfix/*|chore/*)
+                  echo "Valid promotion into dev."
+                  ;;
+                *)
+                  echo "::error::Pull requests into dev must come from feature/*, feat/*, bugfix/*, fix/*, hotfix/*, or chore/*."
+                  exit 1
+                  ;;
+              esac
+              ;;
+            uat)
+              if [[ "${HEAD_BRANCH}" != "dev" ]]; then
+                echo "::error::Pull requests into uat must come only from dev."
+                exit 1
+              fi
+              echo "Valid promotion from dev to uat."
+              ;;
+            main)
+              if [[ "${HEAD_BRANCH}" != "uat" ]]; then
+                echo "::error::Pull requests into main must come only from uat."
+                exit 1
+              fi
+              echo "Valid promotion from uat to main."
+              ;;
+            *)
+              echo "::error::Unsupported destination branch: ${BASE_BRANCH}"
+              exit 1
+              ;;
+          esac
+
+  python-validation:
+    name: Python Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@v6
+
+      # Same Python as backend/Dockerfile's base image.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # ruff is pinned: its default rules and formatting change between releases.
+      # Bump deliberately (run the new version locally, review the diff, update here).
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install ruff==0.16.8
+          python -m pip install -r backend/requirements.txt
+
+      - name: Run Ruff linting
+        run: ruff check .
+
+      - name: Check Ruff formatting
+        run: ruff format --check .
+
+      # The backend has no unit tests yet; importing every module catches syntax
+      # errors, broken imports and bad type annotations before an image is built.
+      - name: Import every backend module
+        working-directory: backend
+        run: |
+          python - <<'EOF'
+          import importlib
+          import pkgutil
+
+          import app
+
+          failed = []
+          for module in pkgutil.walk_packages(app.__path__, "app."):
+              try:
+                  importlib.import_module(module.name)
+              except Exception as exc:
+                  failed.append(f"{module.name}: {exc!r}")
+          if failed:
+              raise SystemExit("Modules that failed to import:\n" + "\n".join(failed))
+          print("Every backend module imports.")
+          EOF
+
+  frontend-validation:
+    name: Frontend Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@v6
+
+      # Same Node as frontend/Dockerfile's build stage.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run ESLint
+        run: npm run lint
+
+      # tsc -b (type check) + vite build, exactly what the image build runs.
+      - name: Type-check and build
+        run: npm run build

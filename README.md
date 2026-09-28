@@ -114,12 +114,34 @@ FinOps, Profiler, SQL Linter.
   newest rows), not to Snowflake `PORTAL_DBT_EXECUTIONS` like the old portal.
 - SQLFluff/profiler/run-operation/custom-command tabs from the old dbt
   Runner page aren't ported — only Execution + Maintenance.
-- CI is [publish-images.yml](.github/workflows/publish-images.yml): every pull
-  request builds both images, pushes to `main` and `v*.*.*` tags publish them to
-  GHCR, and Trivy reports HIGH/CRITICAL findings (report-only — set `exit-code`
-  to `"1"` to gate on them).
 - Images are built as OCI format by default, which drops image-level
   `HEALTHCHECK`; healthchecks therefore live in `compose.yaml` instead.
+
+## Branches and CI
+
+Changes are promoted through three branches, only by pull request:
+
+```mermaid
+flowchart LR
+    F["feature/* · feat/* · fix/*<br/>bugfix/* · hotfix/* · chore/*"] -->|PR| D["dev"] -->|PR| U["uat"] -->|PR| M["main"]
+    M -->|push| P["publish images to GHCR<br/>:latest · :main · :sha-…"]
+    T["tag v1.2.3"] --> P2["publish :1.2.3 · :1.2 · :1"]
+```
+
+| Workflow | Runs on | Checks |
+| :-- | :-- | :-- |
+| [pre-check.yml](.github/workflows/pre-check.yml) | every PR into `dev`, `uat`, `main` | gitleaks secret scan; promotion path (`dev` only from the branch prefixes above, `uat` only from `dev`, `main` only from `uat`); backend `ruff check` + `ruff format --check` (ruff 0.16.8, config in [ruff.toml](ruff.toml)) and every module imports; frontend `npm ci`, `eslint`, `tsc` + `vite build` |
+| [publish-images.yml](.github/workflows/publish-images.yml) | PRs into `dev`/`uat`/`main` (build only); pushes to `main` and `v*.*.*` tags (build + publish) | Both Dockerfiles build; Trivy reports HIGH/CRITICAL findings on published images (report-only: set `exit-code` to `"1"` to gate on them) |
+
+Before opening a PR, run the same checks locally:
+
+```bash
+python -m ruff check . && python -m ruff format --check .   # ruff==0.16.8
+cd frontend && npm ci && npm run lint && npm run build
+```
+
+`frontend/package-lock.json` is committed so CI and image builds install the same versions;
+commit it whenever `package.json` changes.
 
 ## Porting order (suggested)
 

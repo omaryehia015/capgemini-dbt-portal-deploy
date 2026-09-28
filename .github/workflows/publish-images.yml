@@ -5,8 +5,8 @@
 #   ghcr.io/<owner>/<repo>-frontend
 #
 # Triggers:
-#   - pull request to main   -> build only (proves the Dockerfiles and the
-#                               frontend's tsc + vite build still work); no push
+#   - pull request to dev,   -> build only (proves the Dockerfiles and the
+#     uat or main              frontend's tsc + vite build still work); no push
 #   - push to main           -> publishes :latest, :main and :sha-<short>
 #   - push a tag v1.2.3      -> publishes :1.2.3, :1.2 and :1
 #   - manual run             -> publishes :<branch> and :sha-<short>
@@ -22,7 +22,7 @@ name: Publish images
 
 on:
   pull_request:
-    branches: [main]
+    branches: [dev, uat, main]
   push:
     branches: [main]
     tags: ["v*.*.*"]
