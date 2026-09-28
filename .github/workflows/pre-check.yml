@@ -111,7 +111,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/constraints.txt
 
       # ruff is pinned in backend/requirements-dev.txt: its default rules and formatting
       # change between releases. Bump deliberately (run it locally, review the diff).
@@ -120,7 +122,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+          python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt -c backend/constraints.txt
 
       - name: Run Ruff linting
         run: ruff check .
@@ -132,6 +134,10 @@ jobs:
       # no test touches, before an image is built.
       - name: Import every backend module
         working-directory: backend
+        # Settings are validated at import. Production (the default) requires a
+        # real JWT_SECRET, so the check imports in development mode.
+        env:
+          ENVIRONMENT: development
         run: |
           python - <<'EOF'
           import importlib
