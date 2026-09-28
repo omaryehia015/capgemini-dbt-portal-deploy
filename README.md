@@ -148,7 +148,7 @@ flowchart LR
 Before opening a PR, run the same checks locally:
 
 ```bash
-python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt -c backend/constraints.txt
 python -m ruff check . && python -m ruff format --check .
 cd backend && python -m pytest && cd ..
 cd frontend && npm ci && npm run lint && npm test && npm run build
