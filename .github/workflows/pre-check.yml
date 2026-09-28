@@ -134,6 +134,10 @@ jobs:
       # no test touches, before an image is built.
       - name: Import every backend module
         working-directory: backend
+        # Settings are validated at import. Production (the default) requires a
+        # real JWT_SECRET, so the check imports in development mode.
+        env:
+          ENVIRONMENT: development
         run: |
           python - <<'EOF'
           import importlib
