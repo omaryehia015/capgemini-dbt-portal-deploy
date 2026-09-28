@@ -2,8 +2,8 @@
 #
 #   secret-scan              gitleaks over the PR's commits
 #   validate-promotion-path  feature/* | fix/* | ... -> dev -> uat -> main, nothing else
-#   python-validation        backend: ruff lint + format, every module imports
-#   frontend-validation      frontend: npm ci, eslint, tsc + vite build
+#   python-validation        backend: ruff lint + format, every module imports, pytest
+#   frontend-validation      frontend: npm ci, eslint, vitest, tsc + vite build
 #
 # Image builds are checked separately by publish-images.yml, which also runs on these PRs.
 # Make these jobs required status checks in the branch protection rules for dev, uat and main.
@@ -113,15 +113,14 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
-      # ruff is pinned: its default rules and formatting change between releases.
-      # Bump deliberately (run the new version locally, review the diff, update here).
+      # ruff is pinned in backend/requirements-dev.txt: its default rules and formatting
+      # change between releases. Bump deliberately (run it locally, review the diff).
       - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install ruff==0.16.8
-          python -m pip install -r backend/requirements.txt
+          python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
 
       - name: Run Ruff linting
         run: ruff check .
@@ -129,8 +128,8 @@ jobs:
       - name: Check Ruff formatting
         run: ruff format --check .
 
-      # The backend has no unit tests yet; importing every module catches syntax
-      # errors, broken imports and bad type annotations before an image is built.
+      # Catches syntax errors, broken imports and bad type annotations in modules
+      # no test touches, before an image is built.
       - name: Import every backend module
         working-directory: backend
         run: |
@@ -150,6 +149,12 @@ jobs:
               raise SystemExit("Modules that failed to import:\n" + "\n".join(failed))
           print("Every backend module imports.")
           EOF
+
+      # Offline: a throwaway SQLite database, subprocess jobs run the Python
+      # interpreter, and webhooks/SMTP are stubbed. No warehouse is needed.
+      - name: Run backend tests
+        working-directory: backend
+        run: python -m pytest -q
 
   frontend-validation:
     name: Frontend Validation
@@ -176,6 +181,9 @@ jobs:
 
       - name: Run ESLint
         run: npm run lint
+
+      - name: Run unit tests (Vitest)
+        run: npm test
 
       # tsc -b (type check) + vite build, exactly what the image build runs.
       - name: Type-check and build

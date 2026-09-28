@@ -82,38 +82,49 @@ Notes:
   client project's `profiles.yml`. Without them `dbt debug` fails with
   `'user' is a required property`, which is the correct behavior.
 
-Dev seed accounts (override with `SEED_*_PASSWORD` before any real use):
-`admin` / `admin123!`, `engineer` / `engineer123!`, `analyst` / `analyst123!`,
-`auditor` / `auditor123!`.
+The stack starts in **production mode** by default: each seeded account gets a
+random password, printed once in the backend log (`podman logs <backend>`).
+For a local demo with the documented accounts, set `ENVIRONMENT=development`
+in `.env`: `admin` / `admin123!`, `engineer` / `engineer123!`,
+`analyst` / `analyst123!`, `auditor` / `auditor123!`. Production refuses to
+start if any `SEED_*_PASSWORD` is set to one of these.
 
 ## Status
 
-**Verified end-to-end in containers** (built with Podman; exercised through
-nginx on :8080 against the real `capgemini_dbt_core` project — SPA + deep-link
-fallback, login, RBAC 401/403, project/asset discovery from `manifest.json`,
-and a real `dbt debug` job whose output streamed live over WebSocket). The
-frontend now compiles cleanly under `tsc` + `vite build`. **Not yet checked:**
-how the UI actually looks and behaves in a browser — that still needs a human
-pass:
-- JWT auth + RBAC (4 roles, 7 permissions, same model as the old portal)
-- dbt Runner: Execution (run/build/test/seed/snapshot) with all scope modes
-  (all/models/layer/tag/package/custom selector), lineage modifiers, flags
-  (full-refresh/fail-fast/store-failures/threads), Maintenance
-  (deps/clean/compile/debug), live WebSocket log streaming, run history
+Every page of the old Streamlit portal is ported: Home, Onboarding, dbt
+Runner, SQL Linter, Profiler, dbt Docs, Elementary, Colibri, Assets, DWH
+FinOps, Airflow, Ask AI, and Governance.
 
-**Not yet ported (still on Streamlit — routed to a "coming soon" placeholder
-in the sidebar so navigation doesn't 404):**
-dbt Docs, Elementary, Colibri, Airflow, Assets, Ask AI, Governance, DWH
-FinOps, Profiler, SQL Linter.
+Platform features:
 
-**Deliberately simplified vs. the old portal, flagged for follow-up:**
-- Auth is portal-database-backed (`backend/app/services/auth_service.py`,
-  `backend/app/db/`), not Snowflake/LDAP-backed yet — swap the module's
-  `authenticate()`/`get_user()` without touching any route.
-- Run history persists to the portal database (`job_store.py`, bounded to the
-  newest rows), not to Snowflake `PORTAL_DBT_EXECUTIONS` like the old portal.
-- SQLFluff/profiler/run-operation/custom-command tabs from the old dbt
-  Runner page aren't ported — only Execution + Maintenance.
+- **Sessions** use httpOnly, SameSite=Strict cookies: a 15-minute access token
+  renewed silently from a rotating 7-day refresh token. Logout, disabling an
+  account or resetting its password revokes its sessions. Scripts can still
+  call the API with `Authorization: Bearer`.
+- **Scheduler**: cron schedules for any dbt Runner command (the *Schedules*
+  button on the Runner page). Each slot fires exactly once, however many
+  backend replicas run.
+- **Failure alerts** to Slack, Microsoft Teams and email, for manual and
+  scheduled runs (Governance → Failure alerts).
+- **Durable state**: running jobs, run history and the sign-in lockout live in
+  the portal database, so a restart loses nothing. A job whose backend died
+  is marked failed within about 2.5 minutes.
+- **Observability**: JSON logs with a request id on every line, and
+  Prometheus metrics at `/metrics` on the backend's internal port.
+- **Airflow**: with `AIRFLOW_URL` and a service account set, list DAGs, see
+  recent runs, pause/unpause and trigger them from the portal.
+- **UI**: light and dark theme, line icons, a crash screen per page instead of
+  a blank app, and keyboard focus rings with a skip-to-content link.
+
+Known limits:
+
+- More than one backend replica needs PostgreSQL (`DATABASE_URL`). Live log
+  streaming and *Cancel* work on the replica running the job; other replicas
+  show the stored tail once it finishes.
+- Run history persists to the portal database, not to Snowflake
+  `PORTAL_DBT_EXECUTIONS` like the old portal.
+- Email sign-in codes are still held in process memory, so with several
+  replicas the code must be redeemed on the replica that sent it.
 - Images are built as OCI format by default, which drops image-level
   `HEALTHCHECK`; healthchecks therefore live in `compose.yaml` instead.
 
@@ -130,25 +141,18 @@ flowchart LR
 
 | Workflow | Runs on | Checks |
 | :-- | :-- | :-- |
-| [pre-check.yml](.github/workflows/pre-check.yml) | every PR into `dev`, `uat`, `main` | gitleaks secret scan; promotion path (`dev` only from the branch prefixes above, `uat` only from `dev`, `main` only from `uat`); backend `ruff check` + `ruff format --check` (ruff 0.16.8, config in [ruff.toml](ruff.toml)) and every module imports; frontend `npm ci`, `eslint`, `tsc` + `vite build` |
-| [publish-images.yml](.github/workflows/publish-images.yml) | PRs into `dev`/`uat`/`main` (build only); pushes to `main` and `v*.*.*` tags (build + publish) | Both Dockerfiles build; Trivy reports HIGH/CRITICAL findings on published images (report-only: set `exit-code` to `"1"` to gate on them) |
+| [pre-check.yml](.github/workflows/pre-check.yml) | every PR into `dev`, `uat`, `main` | gitleaks secret scan; promotion path (`dev` only from the branch prefixes above, `uat` only from `dev`, `main` only from `uat`); backend `ruff check` + `ruff format --check`, every module imports, `pytest`; frontend `npm ci`, `eslint`, Vitest, `tsc` + `vite build` |
+| [publish-images.yml](.github/workflows/publish-images.yml) | PRs into `dev`/`uat`/`main` (build + scan); pushes to `main` and `v*.*.*` tags (build + scan + publish) | Both Dockerfiles build; Trivy fails the run on a fixable HIGH/CRITICAL vulnerability, before anything is pushed (accepted findings go in [.trivyignore](.trivyignore)) |
+| [e2e-smoke.yml](.github/workflows/e2e-smoke.yml) | PRs into `uat`/`main`, and on demand | Builds the compose stack and runs the Playwright smoke test: sign in, run `dbt debug`, see it in the history |
 
 Before opening a PR, run the same checks locally:
 
 ```bash
-python -m ruff check . && python -m ruff format --check .   # ruff==0.16.8
-cd frontend && npm ci && npm run lint && npm run build
+python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+python -m ruff check . && python -m ruff format --check .
+cd backend && python -m pytest && cd ..
+cd frontend && npm ci && npm run lint && npm test && npm run build
 ```
 
 `frontend/package-lock.json` is committed so CI and image builds install the same versions;
 commit it whenever `package.json` changes.
-
-## Porting order (suggested)
-
-1. Assets (mostly read-only, reuses `dbt_context.discover_client_assets`)
-2. dbt Docs / Elementary / Colibri (serve pre-generated static HTML via
-   FastAPI `StaticFiles` — simpler here than it was on Streamlit)
-3. SQL Linter, Profiler (extend `command_builder.py` + `job_manager.py`,
-   same pattern as dbt Runner)
-4. Governance, DWH FinOps, Airflow, Ask AI (need real backing
-   services/credentials wired up, not just UI)

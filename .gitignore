@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+.pytest_cache/
 *.pyc
 .venv/
 .env
@@ -8,6 +9,8 @@ __pycache__/
 node_modules/
 dist/
 .vite/
+playwright-report/
+test-results/
 
 # Editors / OS
 .vscode/
