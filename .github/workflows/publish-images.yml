@@ -16,8 +16,10 @@
 # public from the package's GitHub settings once clients should
 # `docker compose pull` without authenticating first.
 #
-# Trivy scans each pushed image for HIGH/CRITICAL vulnerabilities. It reports
-# only for now (exit-code 0); set it to "1" to make findings fail the run.
+# Trivy scans every image before it is pushed, on pull requests too, and fails
+# the run on a HIGH or CRITICAL vulnerability that has a fix available. A
+# finding that cannot be fixed yet (or is a false positive) goes in .trivyignore
+# with a comment saying why and until when.
 name: Publish images
 
 on:
@@ -84,31 +86,43 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-
 
-      - id: build
-        name: Build${{ github.event_name != 'pull_request' && ' and push' || '' }}
+      # Build once into the local image store, scan it, and only then push, so a
+      # vulnerable image never reaches the registry.
+      - name: Build
         uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Only the backend takes this arg (the frontend Dockerfile ignores it).
+          load: true
+          push: false
+          tags: local/${{ matrix.name }}:scan
           build-args: |
             EXTRA_PIP_PACKAGES=${{ matrix.name == 'backend' && github.event.inputs.extra_pip_packages || '' }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
       - name: Scan for vulnerabilities (Trivy)
-        if: github.event_name != 'pull_request'
         uses: aquasecurity/trivy-action@v0.36.0
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         with:
-          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          image-ref: local/${{ matrix.name }}:scan
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: "0"
+          trivyignores: .trivyignore
+          exit-code: "1"
+
+      - id: build
+        name: Push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Only the backend takes this arg (the frontend Dockerfile ignores it).
+          build-args: |
+            EXTRA_PIP_PACKAGES=${{ matrix.name == 'backend' && github.event.inputs.extra_pip_packages || '' }}
+          # Same inputs as the scanned build, so every layer comes from its cache.
+          cache-from: type=gha,scope=${{ matrix.name }}
 
       - name: Summary
         if: github.event_name != 'pull_request'

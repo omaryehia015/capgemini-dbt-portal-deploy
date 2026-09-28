@@ -1,0 +1,73 @@
+# Browser smoke test: build the real stack with compose, sign in, run a dbt
+# command and check it lands in the run history (frontend/e2e/smoke.spec.ts).
+#
+# Slower than the pre-check (it builds both images), so it runs on promotions
+# to uat and main, and on demand. The stack has no warehouse credentials, so
+# `dbt debug` fails; the test only needs the run to be recorded.
+name: E2E Smoke
+
+on:
+  pull_request:
+    branches: [uat, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Playwright smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      # Development mode gives the documented seed passwords the test signs in with.
+      ENVIRONMENT: development
+      PORTAL_PORT: "8080"
+      PREFLIGHT_ON_START: "false"
+    steps:
+      - uses: actions/checkout@v7
+
+      # A minimal dbt project for the workspace volume, so the Runner has something to run.
+      - name: Create a sample dbt project
+        run: |
+          mkdir -p "$RUNNER_TEMP/project/models"
+          printf 'name: smoke\nversion: "1.0.0"\nprofile: smoke\n' > "$RUNNER_TEMP/project/dbt_project.yml"
+          printf 'select 1 as id\n' > "$RUNNER_TEMP/project/models/one.sql"
+          echo "DBT_PROJECT_PATH=$RUNNER_TEMP/project" > .env
+          echo "PORTAL_USER=0:0" >> .env
+
+      - name: Start the stack
+        run: docker compose up --build -d --wait --wait-timeout 600
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Playwright
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Run smoke test
+        working-directory: frontend
+        env:
+          PORTAL_URL: http://localhost:8080
+        run: npm run e2e
+
+      - name: Backend log
+        if: failure()
+        run: docker compose logs backend | tail -200
+
+      - uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          retention-days: 7

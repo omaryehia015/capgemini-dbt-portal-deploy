@@ -395,11 +395,14 @@ Four seeded roles (Admin, Lead Engineer/"engineer", Analyst, Auditor — see
 [backend/app/db/seed.py](../backend/app/db/seed.py)) exist from first start,
 stored in the portal database, editable afterward from the Governance page.
 
-- `ENVIRONMENT=development` (the default) seeds documented passwords
-  (`admin123!` etc.) — fine for a demo, never for anything a client can reach.
-- Any other `ENVIRONMENT` value generates a random password per account and
-  prints it once in the backend log (`podman logs`/`kubectl logs`) — capture
-  it there, or pre-set `SEED_ADMIN_PASSWORD` etc. before first start.
+- `ENVIRONMENT=production` (the default) generates a random password per
+  account and prints it once in the backend log (`podman logs`/`kubectl logs`)
+  — capture it there, or pre-set `SEED_ADMIN_PASSWORD` etc. before first start.
+  The backend refuses to start if one of those is set to a documented demo
+  password.
+- `ENVIRONMENT=development` seeds the documented passwords (`admin123!` etc.)
+  — for a local demo only, never for anything a client can reach. Set it
+  explicitly (in `.env`, or in the shell when running `uvicorn` by hand).
 - `JWT_SECRET`: leave unset. The entrypoint generates one and persists it to
   the data volume/PVC on first start (see section 6) — nothing to set outside
   development either.
@@ -425,8 +428,17 @@ and `backend/app/services/snowflake.py` are the source of truth.
 | `DBT_TARGET` | profile's own `target:` | Which `profiles.yml` output to run against. |
 | `EXTRA_PIP_PACKAGES` | — | Backend image **build arg**: extra pip packages (a different adapter, a pinned dbt version). |
 | `JWT_SECRET` | auto-generated | Portal session signing key. Leave unset: the entrypoint generates one on first start and persists it to the data volume/PVC (`/data/.jwt_secret`), so sessions survive restarts without anyone setting a secret by hand. Set it explicitly to pin or rotate it. |
-| `JWT_EXPIRES_MINUTES` | `480` | Session length. |
-| `ENVIRONMENT` | `development` | Gates the JWT-secret check and seed-password behavior above. |
+| `JWT_EXPIRES_MINUTES` | `480` | Lifetime of `Authorization: Bearer` tokens minted for scripts. Browser sessions use the two settings below. |
+| `ACCESS_TOKEN_MINUTES` | `15` | Browser access cookie lifetime; renewed silently before it expires. |
+| `REFRESH_TOKEN_DAYS` | `7` | How long a browser stays signed in without activity. Rotated on every renewal; revoked on logout, account disable and password reset. |
+| `COOKIE_SECURE` | automatic | Force the Secure flag on session cookies on (`true`) or off (`false`). Unset: Secure when the request arrived over HTTPS (directly or with `X-Forwarded-Proto: https`). |
+| `ENVIRONMENT` | `production` | Gates the JWT-secret check and seed-password behavior above. `development` only for local demos. |
+| `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | Backend logging. `json` writes one object per line with a `request_id`; `text` is easier to read on a laptop. |
+| `METRICS_ENABLED` | `true` | Prometheus metrics at `/metrics` on the backend port (not proxied by nginx, so internal only). |
+| `SCHEDULER_ENABLED` | `true` | Fire dbt Runner schedules from this process. Safe with several replicas: each slot is claimed once in the database. |
+| `NOTIFY_SLACK_WEBHOOK` / `NOTIFY_TEAMS_WEBHOOK` / `NOTIFY_EMAIL_TO` | — | Default failure-alert channels. Admins can change them at runtime (Governance → Failure alerts); the stored values win. |
+| `PORTAL_BASE_URL` | — | Public URL of the portal, so alerts link straight to the failed run. |
+| `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | — | Service account for the Airflow REST API (with `AIRFLOW_URL`): DAG list, recent runs, trigger, pause. Without them the Airflow page only probes `/health` and embeds the UI. |
 | `SEED_ADMIN_PASSWORD` / `SEED_ENGINEER_PASSWORD` / `SEED_ANALYST_PASSWORD` / `SEED_AUDITOR_PASSWORD` | dev defaults, else random | Initial password for each seeded account. |
 | `DATABASE_URL` | `sqlite:////data/portal.db` | Portal state (users, roles, audit log, run history). Any SQLAlchemy URL; `postgresql+psycopg2://...` for Postgres. |
 | `DBT_PKG_ACCOUNT` / `_USER` / `_PASSWORD` / `_ROLE` / `_WAREHOUSE` / `_DATABASE` | — | Warehouse credentials, read by both `profiles.yml` (via `env_var`) and the portal's Snowflake pages. |
@@ -503,3 +515,39 @@ Preflight: passed
    (or set `SEED_*_PASSWORD` beforehand) and hand it to the client through
    your normal secret-sharing channel, not this repo. `JWT_SECRET` needs no
    action either way — it's generated and persisted automatically.
+
+## 9. Operating the portal
+
+**Logs.** The backend writes one JSON object per line to stdout: `ts`,
+`level`, `logger`, `msg`, a `request_id` for anything that happened during an
+HTTP request, and context fields (`job_id`, `kind`, `status`, `duration_ms` ...).
+Every response carries the same id in `X-Request-ID`, so a user's error
+report can be matched to its log lines. Set `LOG_FORMAT=text` for a laptop.
+
+**Metrics.** `GET /metrics` on the backend port (not through nginx) serves
+Prometheus metrics: `portal_http_requests_total` and
+`portal_http_request_duration_seconds` by route template,
+`portal_jobs_started_total`, `portal_jobs_finished_total{status}`,
+`portal_job_duration_seconds`, `portal_jobs_running`,
+`portal_schedule_fires_total{outcome}` and
+`portal_notifications_total{channel,outcome}`. The Kubernetes manifest carries
+the usual `prometheus.io/*` scrape annotations.
+
+**Schedules.** On the dbt Runner page, build a command, then *Schedules → Add
+schedule* with a cron expression and a time zone. A schedule runs as the user
+who last saved it, and stops firing if that user is disabled or loses
+`dbt.execute`. A slot missed while the backend was down runs late only
+within 5 minutes; older ones are skipped, not replayed.
+
+**Failure alerts.** Governance → Failure alerts (Admin role): Slack and Teams
+webhooks, email recipients, and whether warnings and manual runs alert too.
+*Send test alert* checks each channel. Webhook URLs are never shown again
+after saving; the page displays a masked form.
+
+**Restarts and replicas.** Running jobs are written to the portal database
+and kept alive by a heartbeat. If the backend stops, its jobs are marked
+failed with "Interrupted" (right away on a clean shutdown, within about 2.5
+minutes after a crash). Sign-in lockouts and sessions are in the database
+too. Several replicas need PostgreSQL (`DATABASE_URL`); live log streaming
+and *Cancel* then work on the replica that runs the job.
+

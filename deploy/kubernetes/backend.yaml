@@ -1,6 +1,7 @@
-# FastAPI backend. Runs exactly ONE replica: running jobs and their live log
-# streams are held in process memory, and SQLite on a ReadWriteOnce volume
-# cannot be shared either.
+# FastAPI backend. ONE replica with the default SQLite database (a
+# ReadWriteOnce volume cannot be shared). With DATABASE_URL pointing at
+# PostgreSQL, more replicas work: jobs, schedules, sessions and lockouts are
+# coordinated through the database (see docs/ONBOARDING.md section 9).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,6 +16,10 @@ spec:
   template:
     metadata:
       labels: { app: dbt-portal, component: backend }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
     spec:
       securityContext:
         runAsUser: 10001
