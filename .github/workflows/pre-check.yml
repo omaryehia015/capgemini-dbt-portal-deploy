@@ -7,6 +7,9 @@
 #
 # Image builds are checked separately by publish-images.yml, which also runs on these PRs.
 # Make these jobs required status checks in the branch protection rules for dev, uat and main.
+#
+# Runners are pinned to ubuntu-24.04 rather than ubuntu-latest, so an image change (such as
+# ubuntu-latest moving to Ubuntu 26) happens when we choose. Actions are on their Node 24 majors.
 name: Pull Request Pre-Check
 
 on:
@@ -32,12 +35,12 @@ permissions:
 jobs:
   secret-scan:
     name: Secret Scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
       - name: Check out source code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -48,7 +51,7 @@ jobs:
 
   validate-promotion-path:
     name: Validate Promotion Path
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
@@ -95,16 +98,16 @@ jobs:
 
   python-validation:
     name: Python Validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
       - name: Check out source code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Same Python as backend/Dockerfile's base image.
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -150,7 +153,7 @@ jobs:
 
   frontend-validation:
     name: Frontend Validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -158,11 +161,11 @@ jobs:
 
     steps:
       - name: Check out source code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       # Same Node as frontend/Dockerfile's build stage.
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
