@@ -8,7 +8,7 @@
 # git-cloned project instead of a mount, a non-Snowflake warehouse image, etc.
 services:
   backend:
-    image: ${IMAGE_REGISTRY:-ghcr.io/OWNER/REPO}-backend:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015/capgemini-dbt-portal}-backend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     # Non-root by default. Windows/macOS bind mounts (Podman/Docker Desktop) show
     # every file as root-owned and refuse chmod/utime from other users, which
@@ -44,7 +44,7 @@ services:
       retries: 3
 
   frontend:
-    image: ${IMAGE_REGISTRY:-ghcr.io/OWNER/REPO}-frontend:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015/capgemini-dbt-portal}-frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       backend:
