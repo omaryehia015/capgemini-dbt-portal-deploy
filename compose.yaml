@@ -28,9 +28,10 @@ services:
       # persists it on the portal_data volume (same secret across restarts,
       # so sessions survive them) -- set it explicitly to pin/rotate it.
       JWT_SECRET: ${JWT_SECRET:-}
-      # "development" seeds documented default passwords; any other value
-      # generates random ones (printed once in the backend log).
-      ENVIRONMENT: ${ENVIRONMENT:-development}
+      # production (the default) generates a random password per seeded
+      # account, printed once in the backend log. "development" seeds the
+      # documented demo passwords instead: set it in .env for a local demo only.
+      ENVIRONMENT: ${ENVIRONMENT:-production}
     volumes:
       # The client dbt project the portal runs dbt against. dbt writes
       # target/, logs/ and dbt_packages/ into it, so it is mounted read-write.
