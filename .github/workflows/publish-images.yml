@@ -1,11 +1,12 @@
-# Builds the two images a client actually runs (see deploy/client/) and, outside
+# Builds the three images a client actually runs (see deploy/client/) and, outside
 # pull requests, publishes them to GitHub Container Registry:
 #
 #   ghcr.io/<owner>/<repo>-backend
 #   ghcr.io/<owner>/<repo>-frontend
+#   ghcr.io/<owner>/<repo>-cube       (managed semantic layer)
 #
-# Only the image whose side changed is built (see `changes`); tags and manual
-# runs build both.
+# Only the images whose side changed are built (see `changes`); tags and manual
+# runs build all three.
 #
 # Triggers:
 #   - pull request to dev,   -> build only (proves the Dockerfiles and the
@@ -60,11 +61,12 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      cube: ${{ steps.filter.outputs.cube }}
       matrix: ${{ steps.pick.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
       - id: filter
-        # A tag or manual run has no previous commit to compare with; it builds both anyway.
+        # A tag or manual run has no previous commit to compare with; it builds them all anyway.
         if: github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/')
         uses: dorny/paths-filter@v3
         with:
@@ -78,12 +80,18 @@ jobs:
               - 'frontend/**'
               - '.trivyignore'
               - '.github/workflows/publish-images.yml'
-      # Tags and manual runs always build both images (a release ships both).
+            # The managed semantic layer (official Cube image + the portal's cube.js).
+            cube:
+              - 'cube/**'
+              - '.trivyignore'
+              - '.github/workflows/publish-images.yml'
+      # Tags and manual runs always build every image (a release ships them all).
       - id: pick
         env:
           ALL: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
           BACKEND: ${{ steps.filter.outputs.backend }}
           FRONTEND: ${{ steps.filter.outputs.frontend }}
+          CUBE: ${{ steps.filter.outputs.cube }}
         run: |
           set -euo pipefail
           items=()
@@ -92,6 +100,9 @@ jobs:
           fi
           if [[ "$ALL" == "true" || "$FRONTEND" == "true" ]]; then
             items+=('{"name":"frontend","context":"./frontend"}')
+          fi
+          if [[ "$ALL" == "true" || "$CUBE" == "true" ]]; then
+            items+=('{"name":"cube","context":"./cube"}')
           fi
           echo "matrix=[$(IFS=,; echo "${items[*]}")]" >> "$GITHUB_OUTPUT"
 

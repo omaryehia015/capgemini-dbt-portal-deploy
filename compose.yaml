@@ -32,6 +32,8 @@ services:
       # account, printed once in the backend log. "development" seeds the
       # documented demo passwords instead: set it in .env for a local demo only.
       ENVIRONMENT: ${ENVIRONMENT:-production}
+      CUBE_SHARED_DIR: /cube-shared
+      CUBE_API_URL: http://cube:4000
     volumes:
       # The client dbt project the portal runs dbt against. dbt writes
       # target/, logs/ and dbt_packages/ into it, so it is mounted read-write.
@@ -41,6 +43,9 @@ services:
       # Users, roles, audit log and run history (SQLite). Survives rebuilds.
       # Set DATABASE_URL in .env to use PostgreSQL instead.
       - portal_data:/data
+      # Written by the backend, read by the cube service: API secret, warehouse
+      # login and the semantic data model (see services/cube_manager.py).
+      - cube_shared:/cube-shared
     expose:
       - "8000"
     # Declared here rather than only in the Dockerfile: Podman builds OCI
@@ -52,6 +57,25 @@ services:
       timeout: 5s
       # Git mode clones (and optionally runs dbt deps) before uvicorn starts.
       start_period: 120s
+      retries: 3
+
+  # Managed semantic layer (Cube). Internal network only: the backend is its
+  # only client. It needs no configuration: the backend writes its warehouse
+  # login and data model into cube_shared (Semantic Modeling page > Setup).
+  cube:
+    build:
+      context: ./cube
+    image: capgemini-dbt-portal-cube:local
+    restart: unless-stopped
+    volumes:
+      - cube_shared:/cube/conf/portal
+    expose:
+      - "4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/livez').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
       retries: 3
 
   frontend:
@@ -67,4 +91,5 @@ services:
 
 volumes:
   portal_data:
+  cube_shared:
   workspace:

@@ -20,6 +20,8 @@ services:
       # Random per-account passwords, generated on first start and printed
       # once to `docker compose logs backend` -- see README.md.
       ENVIRONMENT: ${ENVIRONMENT:-production}
+      CUBE_SHARED_DIR: /cube-shared
+      CUBE_API_URL: http://cube:4000
     volumes:
       # The client's dbt project (the folder with dbt_project.yml in it).
       # Unset (git mode instead): the entrypoint clones DBT_PROJECT_GIT_URL
@@ -28,6 +30,8 @@ services:
       # Portal accounts, audit log, run history, and the auto-generated
       # session secret. Survives restarts and upgrades.
       - portal_data:/data
+      # Handed to the cube service: API secret, warehouse login, data model.
+      - cube_shared:/cube-shared
     env_file:
       # Optional: only needed for settings that aren't in the dbt project's
       # own .env -- DBT_PROJECT_GIT_URL, a non-default DATABASE_URL, etc.
@@ -43,6 +47,15 @@ services:
       start_period: 30s
       retries: 3
 
+  # Semantic layer (Cube), configured from the portal: nothing to set here.
+  cube:
+    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015/capgemini-dbt-portal}-cube:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    volumes:
+      - cube_shared:/cube/conf/portal
+    expose:
+      - "4000"
+
   frontend:
     image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015/capgemini-dbt-portal}-frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
@@ -54,4 +67,5 @@ services:
 
 volumes:
   portal_data:
+  cube_shared:
   workspace:
