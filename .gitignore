@@ -20,3 +20,7 @@ test-results/
 # Deploy secrets
 deploy/kubernetes/secrets.env
 deploy/client/.env
+
+# Local runs outside the containers: portal DB and the semantic layer volume
+# (cube_manager falls back here; holds the generated Cube API secret).
+backend/data/
