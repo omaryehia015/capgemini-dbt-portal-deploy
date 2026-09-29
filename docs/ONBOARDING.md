@@ -407,6 +407,59 @@ stored in the portal database, editable afterward from the Governance page.
   the data volume/PVC on first start (see section 6) — nothing to set outside
   development either.
 
+## 5a. Data ingestion with Airbyte (optional)
+
+The portal covers transform, test, document and serve. For the step before
+that — getting source data (Salesforce, Postgres, S3, Stripe, 300+ others)
+into the warehouse's raw schemas — it connects to an **Airbyte** instance
+running next to it. Airbyte is free to self-host; the client runs it on their
+own server for their own data.
+
+**Why it is not in `compose.yaml`:** since 1.0, Airbyte installs only with its
+own tool, `abctl` (it runs a small Kubernetes cluster inside one Docker
+container, because every sync starts its own connector container). It still
+runs on the same Docker host as the portal — it is just started by a
+different command.
+
+1. **Install Airbyte** on the portal's server (about 4 CPUs / 8 GB RAM extra):
+
+   ```bash
+   curl -LsfS https://get.airbyte.com | bash -
+   abctl local install --host <server-hostname>   # UI + API on port 8000
+   abctl local credentials                        # prints client-id / client-secret
+   ```
+
+   `--host` must be the name users (and the portal) use to reach it; Airbyte's
+   ingress answers 404 to any other host name. Kubernetes clients install the
+   official Helm chart instead; Airbyte Cloud works too
+   (`AIRBYTE_URL=https://api.airbyte.com/v1`).
+
+2. **Point the portal at it** in `.env`:
+
+   ```bash
+   AIRBYTE_URL=http://host.docker.internal:8000   # Podman: host.containers.internal
+   AIRBYTE_CLIENT_ID=<client-id>
+   AIRBYTE_CLIENT_SECRET=<client-secret>
+   AIRBYTE_UI_URL=http://<server-hostname>:8000   # link users' browsers open
+   ```
+
+   On Linux with Docker Engine (not Desktop), `host.docker.internal` needs
+   `extra_hosts: ["host.docker.internal:host-gateway"]` on the backend
+   service — or use the server's hostname/IP directly in `AIRBYTE_URL`.
+   Then `docker compose up -d backend`.
+
+3. **Check it** on **Tools & Services** (sidebar → Workspace): the Airbyte
+   card turns green once the URL is reachable and the credentials work. The
+   **Airbyte** page (sidebar → Ingestion) lists connections with their last
+   sync, sync history, and *Sync now* / cancel. Sources, destinations and
+   connections are created in Airbyte's own UI (its connector forms come from
+   each connector's spec).
+
+**Scheduling:** set a connection's schedule to *Manual* in Airbyte when the
+portal or Airflow will trigger it, so it never runs twice. Access follows the
+`airflow.manage` permission ("Orchestration & Ingestion": Admin and Data
+Engineer by default), and every sync and cancel lands in the audit trail.
+
 ## 6. Every environment variable (reference)
 
 Full template with inline comments: [.env.example](../.env.example). Grouped
@@ -444,6 +497,10 @@ and `backend/app/services/snowflake.py` are the source of truth.
 | `DBT_PKG_ACCOUNT` / `_USER` / `_PASSWORD` / `_ROLE` / `_WAREHOUSE` / `_DATABASE` | — | Warehouse credentials, read by both `profiles.yml` (via `env_var`) and the portal's Snowflake pages. |
 | `CORS_ORIGINS` | `["http://localhost:5173"]` | Only relevant if the frontend is served from a different origin than the backend (not the case for the compose/Kubernetes/VM setups above, which proxy same-origin). |
 | `AIRFLOW_URL` / `AIRFLOW_WEBSERVER_URL` | — | Default URL shown on the Airflow page; users can still enter one at runtime. |
+| `AIRBYTE_URL` | — | Airbyte root the backend calls (section 5a): `http://host.docker.internal:8000` for `abctl` on the same host, `https://api.airbyte.com/v1` for Airbyte Cloud. Unset = the Airbyte page shows the install steps. |
+| `AIRBYTE_CLIENT_ID` / `AIRBYTE_CLIENT_SECRET` | — | API application credentials (`abctl local credentials`, or an Airbyte Cloud application). Only omit for an install with auth disabled. |
+| `AIRBYTE_WORKSPACE_ID` | all workspaces | Limit the Airbyte page to one workspace. |
+| `AIRBYTE_UI_URL` | derived from `AIRBYTE_URL` | The Airbyte UI link users' browsers open, when it differs from the URL the backend uses. |
 | `COLIBRI_DIST_DIR` | auto-discovered | Override where the Colibri static report is found. |
 | `PREFLIGHT_ON_START` | `true` | Set `false` to skip the entrypoint's preflight checks entirely. |
 | `PREFLIGHT_STRICT` | `false` | `true` refuses to start the container when preflight finds a failure (vs. warning and starting anyway). |

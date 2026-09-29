@@ -77,6 +77,13 @@ For sign-in with your company directory (LDAP), emailed sign-in codes, AI
 keys and similar settings, copy `.env.example` to `.env` **next to the
 script**, uncomment what you need, and run the script again.
 
+**Data ingestion (Airbyte):** install Airbyte on the same server with
+`abctl local install --host <this-server>`, put the `AIRBYTE_*` lines from
+`.env.example` in `.env` (the id/secret come from `abctl local credentials`)
+and run the script again. The portal's **Airbyte** page then lists your
+connections and runs syncs; **Tools & Services** shows whether every
+integration is working.
+
 ## Managing it
 
 The script prints these with your project's names filled in:

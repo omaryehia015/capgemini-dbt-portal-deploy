@@ -113,6 +113,11 @@ Platform features:
   Prometheus metrics at `/metrics` on the backend's internal port.
 - **Airflow**: with `AIRFLOW_URL` and a service account set, list DAGs, see
   recent runs, pause/unpause and trigger them from the portal.
+- **Airbyte**: connect a self-hosted (`abctl`) or Cloud Airbyte to list
+  connections with their last sync, run and cancel syncs, and browse sync
+  history (docs/ONBOARDING.md, section 5a).
+- **Tools & Services**: one page with every integrated tool's live status,
+  version, config variables and next step when it isn't working.
 - **UI**: light and dark theme, line icons, a crash screen per page instead of
   a blank app, and keyboard focus rings with a skip-to-content link.
 
