@@ -28,10 +28,6 @@ on:
         default: ""
         type: string
 
-permissions:
-  contents: read
-  packages: write
-
 jobs:
   container:
     runs-on: ubuntu-24.04
