@@ -118,6 +118,20 @@ Platform features:
   history (docs/ONBOARDING.md, section 5a).
 - **Tools & Services**: one page with every integrated tool's live status,
   version, config variables and next step when it isn't working.
+- **dbt Development** (first page under Build & Quality): a VS Code-style
+  editor (Monaco, bundled, no CDN) on the project's files: explorer, tabs,
+  search in files, dbt-aware Jinja SQL with `ref()`/`source()`/macro
+  completion, hover and go-to-definition, layered new-file templates
+  (staging/intermediate/marts, sources, snapshots, tests), a model inspector
+  (lineage, columns, tests, compiled SQL side by side) and Preview / Compile /
+  Run / Build / Test / Lint on the open model with live output. Saves are
+  optimistic (a file someone else changed is never silently overwritten),
+  deletes go to a restorable trash on the data volume, git changes can be
+  diffed and discarded, and every write is in the audit trail. Editing needs
+  the new `dbt.develop` permission (granted once to Admin and Data Engineer);
+  `dbt.execute` alone can browse. Secrets (`.env`, `*.env`, `profiles.yml`,
+  keys, `.git`) are never listed; `target/`, `dbt_packages/` and `logs/` are
+  read-only.
 - **UI**: light and dark theme, line icons, a crash screen per page instead of
   a blank app, and keyboard focus rings with a skip-to-content link.
 
@@ -130,6 +144,10 @@ Known limits:
   `PORTAL_DBT_EXECUTIONS` like the old portal.
 - Email sign-in codes are still held in process memory, so with several
   replicas the code must be redeemed on the replica that sent it.
+- dbt Development edits the shared working copy: there is no per-user
+  branch, and commit/push stay in your git workflow. In git mode
+  (`DBT_PROJECT_GIT_URL`) uncommitted edits are reset when the backend
+  restarts; the page warns about it.
 - Images are built as OCI format by default, which drops image-level
   `HEALTHCHECK`; healthchecks therefore live in `compose.yaml` instead.
 
