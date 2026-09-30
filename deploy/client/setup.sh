@@ -71,16 +71,30 @@ elif ! { say "Pulling $BACKEND and $FRONTEND"; "$E" pull "$BACKEND" && "$E" pull
     printf '%s' "$token" | "$E" login "${REGISTRY%%/*}" -u "$user" --password-stdin
     "$E" pull "$BACKEND" && "$E" pull "$FRONTEND"
 fi
+# The semantic engine (Semantic Modeling page) is optional: without its image the
+# portal still runs, and that page says the engine is offline.
+CUBE="$REGISTRY-cube:$TAG"
+if [[ -n "$SKIP_PULL" ]]; then "$E" image inspect "$CUBE" >/dev/null 2>&1 && WITH_CUBE=1
+else "$E" pull "$CUBE" >/dev/null 2>&1 && WITH_CUBE=1; fi
+[[ -n "${WITH_CUBE:-}" ]] || echo "WARNING: $CUBE is not available; starting without the semantic engine."
 
 # -- 4. Start (replaces old containers; the data volume is kept) ---------------
 say "Starting"
-"$E" rm -f "$NAME-frontend" "$NAME-backend" >/dev/null 2>&1 || true
+"$E" rm -f "$NAME-frontend" "$NAME-cube" "$NAME-backend" >/dev/null 2>&1 || true
 "$E" network create "$NAME" >/dev/null 2>&1 || true
 "$E" volume create "$NAME-data" >/dev/null 2>&1 || true
+# Shared by the backend and the semantic engine: API secret, warehouse login, model.
+"$E" volume create "$NAME-cube" >/dev/null 2>&1 || true
 # Root inside the container: bind mounts on Windows/macOS and rootless Podman need it for `dbt deps`.
 "$E" run -d --name "$NAME-backend" --network "$NAME" --network-alias backend --restart unless-stopped \
     --user 0:0 -e DBT_PROJECT_DIR=/workspace -e ENVIRONMENT=production \
-    -v "$PROJECT:/workspace" -v "$NAME-data:/data" ${extra[@]+"${extra[@]}"} "$BACKEND" >/dev/null
+    -e CUBE_SHARED_DIR=/cube-shared -e CUBE_API_URL=http://cube:4000 \
+    -v "$PROJECT:/workspace" -v "$NAME-data:/data" -v "$NAME-cube:/cube-shared" ${extra[@]+"${extra[@]}"} "$BACKEND" >/dev/null
+if [[ -n "${WITH_CUBE:-}" ]]; then
+    "$E" run -d --name "$NAME-cube" --network "$NAME" --network-alias cube --restart unless-stopped \
+        -v "$NAME-cube:/cube/conf/portal" "$CUBE" >/dev/null \
+        || echo "WARNING: could not start the semantic engine. See: $E logs $NAME-cube"
+fi
 "$E" run -d --name "$NAME-frontend" --network "$NAME" --restart unless-stopped \
     -p "$PORT:8080" -e BACKEND_UPSTREAM=backend:8000 "$FRONTEND" >/dev/null \
     || fail "Could not start the frontend (port $PORT taken?). Try: ./setup.sh '$PROJECT' --port 8081"
@@ -106,7 +120,7 @@ Next:
 
 Manage:
   $E logs -f $NAME-backend   # what the backend is doing
-  $E stop $NAME-frontend $NAME-backend   # stop
-  $E start $NAME-backend $NAME-frontend   # start again
-  $E rm -f $NAME-frontend $NAME-backend && $E volume rm $NAME-data   # uninstall (deletes accounts)
+  $E stop $NAME-frontend $NAME-cube $NAME-backend   # stop
+  $E start $NAME-backend $NAME-cube $NAME-frontend   # start again
+  $E rm -f $NAME-frontend $NAME-cube $NAME-backend && $E volume rm $NAME-data $NAME-cube   # uninstall (deletes accounts)
 EOF

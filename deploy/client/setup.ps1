@@ -83,17 +83,30 @@ if (-not $pulled) {
     & $E pull $Backend; if ($LASTEXITCODE -ne 0) { Fail "Could not pull $Backend." }
     & $E pull $Frontend; if ($LASTEXITCODE -ne 0) { Fail "Could not pull $Frontend." }
 }
+# The semantic engine (Semantic Modeling page) is optional: without its image the
+# portal still runs, and that page says the engine is offline.
+$Cube = "${Registry}-cube:$Tag"
+$withCube = if ($SkipPull) { Try-Run image inspect $Cube } else { Try-Run pull $Cube }
+if (-not $withCube) { Write-Host "WARNING: $Cube is not available; starting without the semantic engine." -ForegroundColor Yellow }
 
 # -- 4. Start (replaces old containers; the data volume is kept) ---------------
 Say "Starting"
-Try-Run rm -f "$Name-frontend" "$Name-backend" | Out-Null
+Try-Run rm -f "$Name-frontend" "$Name-cube" "$Name-backend" | Out-Null
 Try-Run network create $Name | Out-Null
 Try-Run volume create "$Name-data" | Out-Null
+# Shared by the backend and the semantic engine: API secret, warehouse login, model.
+Try-Run volume create "$Name-cube" | Out-Null
 # Root inside the container: Windows bind mounts need it for `dbt deps`.
 $ok = Try-Run run -d --name "$Name-backend" --network $Name --network-alias backend --restart unless-stopped `
     --user 0:0 -e DBT_PROJECT_DIR=/workspace -e ENVIRONMENT=production `
-    -v "${Project}:/workspace" -v "${Name}-data:/data" @extra $Backend
+    -e CUBE_SHARED_DIR=/cube-shared -e CUBE_API_URL=http://cube:4000 `
+    -v "${Project}:/workspace" -v "${Name}-data:/data" -v "${Name}-cube:/cube-shared" @extra $Backend
 if (-not $ok) { Fail "Could not start the backend. Try: $E run --rm $Backend" }
+if ($withCube) {
+    $ok = Try-Run run -d --name "$Name-cube" --network $Name --network-alias cube --restart unless-stopped `
+        -v "${Name}-cube:/cube/conf/portal" $Cube
+    if (-not $ok) { Write-Host "WARNING: could not start the semantic engine. See: $E logs $Name-cube" -ForegroundColor Yellow }
+}
 $ok = Try-Run run -d --name "$Name-frontend" --network $Name --restart unless-stopped `
     -p "${Port}:8080" -e BACKEND_UPSTREAM=backend:8000 $Frontend
 if (-not $ok) { Fail "Could not start the frontend (port $Port taken?). Try: .\setup.ps1 -Project '$Project' -Port 8081" }
@@ -126,8 +139,8 @@ Next:
 
 Manage:
   $E logs -f $Name-backend   # what the backend is doing
-  $E stop $Name-frontend $Name-backend   # stop
-  $E start $Name-backend $Name-frontend   # start again
-  $E rm -f $Name-frontend $Name-backend; $E volume rm $Name-data   # uninstall (deletes accounts)
+  $E stop $Name-frontend $Name-cube $Name-backend   # stop
+  $E start $Name-backend $Name-cube $Name-frontend   # start again
+  $E rm -f $Name-frontend $Name-cube $Name-backend; $E volume rm $Name-data $Name-cube   # uninstall (deletes accounts)
 "@
 Start-Process "http://localhost:$Port"
