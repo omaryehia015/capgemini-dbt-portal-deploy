@@ -157,16 +157,20 @@ Changes are promoted through three branches, only by pull request:
 
 ```mermaid
 flowchart LR
-    F["feature/* · feat/* · fix/*<br/>bugfix/* · hotfix/* · chore/*"] -->|PR| D["dev"] -->|PR| U["uat"] -->|PR| M["main"]
-    M -->|push| P["publish images to GHCR<br/>:latest · :main · :sha-…"]
-    T["tag v1.2.3"] --> P2["publish :1.2.3 · :1.2 · :1"]
+  F["feature/* · feat/* · fix/*<br/>bugfix/* · hotfix/* · chore/*"] -->|PR| D["dev"] -->|PR| T["test"] -->|PR| M["main"]
+  D -->|push| PD["publish dev images"]
+  T -->|push| PT["publish test images"]
+  M -->|push| PM["publish prod images"]
 ```
 
 | Workflow | Runs on | Checks |
 | :-- | :-- | :-- |
-| [pre-check.yml](.github/workflows/pre-check.yml) | every PR into `dev`, `uat`, `main` | gitleaks secret scan; promotion path (`dev` only from the branch prefixes above, `uat` only from `dev`, `main` only from `uat`); backend `ruff check` + `ruff format --check`, every module imports, `pytest`; frontend `npm ci`, `eslint`, Vitest, `tsc` + `vite build` |
-| [publish-images.yml](.github/workflows/publish-images.yml) | PRs into `dev`/`uat`/`main` (build + scan); pushes to `main` and `v*.*.*` tags (build + scan + publish) | Both Dockerfiles build; Trivy fails the run on a fixable HIGH/CRITICAL vulnerability, before anything is pushed (accepted findings go in [.trivyignore](.trivyignore)) |
-| [e2e-smoke.yml](.github/workflows/e2e-smoke.yml) | PRs into `uat`/`main`, and on demand | Builds the compose stack and runs the Playwright smoke test: sign in, run `dbt debug`, see it in the history |
+| [pre-check.yml](.github/workflows/pre-check.yml) | PRs into `dev`, `test`, `main`; workflow-only changes are ignored | gitleaks and repository scans; promotion path; backend, frontend, and cube validation/image scans run only for changed components |
+| [publish-images-dev.yml](.github/workflows/publish-images-dev.yml) | Pushes to `dev`, or manual dispatch | Publishes selected components to the `dev` image tag; manual runs are fixed to the `dev` environment and branch |
+| [publish-images-test.yml](.github/workflows/publish-images-test.yml) | Pushes to `test`, or manual dispatch | Publishes selected components to the `test` image tag; manual runs are fixed to the `test` environment and branch |
+| [publish-images-prod.yml](.github/workflows/publish-images-prod.yml) | Pushes to `main`, or manual dispatch | Publishes selected components to the `prod` image tag; manual runs are fixed to the `prod` environment and `main` branch |
+| [publish-images.yml](.github/workflows/publish-images.yml) | Called by the three environment workflows | Shared build, Trivy scan, GHCR publish, and Teams status notification logic |
+| [e2e-smoke.yml](.github/workflows/e2e-smoke.yml) | Manual dispatch | Builds the compose stack and runs the Playwright smoke test |
 
 Before opening a PR, run the same checks locally:
 

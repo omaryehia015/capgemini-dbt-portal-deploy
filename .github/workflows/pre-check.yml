@@ -3,6 +3,7 @@ on:
   pull_request:
     branches: [dev, test, main]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: ['.github/workflows/**']
 concurrency:
   group: pre-check-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -22,9 +23,9 @@ jobs:
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            backend: ['backend/**', 'ruff.toml', '.trivyignore', '.github/workflows/**']
-            frontend: ['frontend/**', '.trivyignore', '.github/workflows/**']
-            cube: ['cube/**', '.trivyignore', '.github/workflows/**']
+            backend: ['backend/**', 'ruff.toml', '.trivyignore']
+            frontend: ['frontend/**', '.trivyignore']
+            cube: ['cube/**', '.trivyignore']
   promotion-path:
     runs-on: ubuntu-24.04
     steps:
