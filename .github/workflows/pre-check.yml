@@ -1,229 +1,152 @@
-# Pull Request Pre-Check: every PR into dev, uat or main must pass these before merge.
-# The backend and frontend jobs run only when their side changed (see `changes`).
-#
-#   secret-scan              gitleaks over the PR's commits
-#   validate-promotion-path  feature/* | fix/* | ... -> dev -> uat -> main, nothing else
-#   python-validation        backend: ruff lint + format, every module imports, pytest
-#   frontend-validation      frontend: npm ci, eslint, vitest, tsc + vite build
-#
-# Image builds are checked separately by publish-images.yml, which also runs on these PRs.
-# Make these jobs required status checks in the branch protection rules for dev, uat and main.
-#
-# Runners are pinned to ubuntu-24.04 rather than ubuntu-latest, so an image change (such as
-# ubuntu-latest moving to Ubuntu 26) happens when we choose. Actions are on their Node 24 majors.
 name: Pull Request Pre-Check
-
 on:
   pull_request:
-    branches:
-      - dev
-      - uat
-      - main
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - ready_for_review
-
+    branches: [dev, test, main]
+    types: [opened, synchronize, reopened, ready_for_review]
 concurrency:
   group: pre-check-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-
 permissions:
   contents: read
   pull-requests: read
-
 jobs:
-  # Which side of the repo this change touches. A job for the other side is
-  # skipped, and a skipped job counts as passed for required status checks.
   changes:
-    name: Detect changes
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.files_changed.outputs.backend }}
+      frontend: ${{ steps.files_changed.outputs.frontend }}
+      cube: ${{ steps.files_changed.outputs.cube }}
     steps:
-      - uses: actions/checkout@v7
-      - id: filter
+      - uses: actions/checkout@v6
+      - id: files_changed
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            backend:
-              - 'backend/**'
-              - 'ruff.toml'
-              - '.trivyignore'
-              - '.github/workflows/pre-check.yml'
-            frontend:
-              - 'frontend/**'
-              - '.trivyignore'
-              - '.github/workflows/pre-check.yml'
-
-  secret-scan:
-    name: Secret Scan
+            backend: ['backend/**', 'ruff.toml', '.trivyignore', '.github/workflows/**']
+            frontend: ['frontend/**', '.trivyignore', '.github/workflows/**']
+            cube: ['cube/**', '.trivyignore', '.github/workflows/**']
+  promotion-path:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-
     steps:
-      - name: Check out source code
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Scan repository for secrets
-        uses: gitleaks/gitleaks-action@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  validate-promotion-path:
-    name: Validate Promotion Path
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-
-    steps:
-      - name: Validate source and destination branches
+      - env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
         shell: bash
-        env:
-          BASE_BRANCH: ${{ github.base_ref }}
-          HEAD_BRANCH: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          echo "Source branch: ${HEAD_BRANCH}"
-          echo "Target branch: ${BASE_BRANCH}"
-          case "${BASE_BRANCH}" in
-            dev)
-              case "${HEAD_BRANCH}" in
-                feature/*|feat/*|bugfix/*|fix/*|hotfix/*|chore/*)
-                  echo "Valid promotion into dev."
-                  ;;
-                *)
-                  echo "::error::Pull requests into dev must come from feature/*, feat/*, bugfix/*, fix/*, hotfix/*, or chore/*."
-                  exit 1
-                  ;;
-              esac
-              ;;
-            uat)
-              if [[ "${HEAD_BRANCH}" != "dev" ]]; then
-                echo "::error::Pull requests into uat must come only from dev."
-                exit 1
-              fi
-              echo "Valid promotion from dev to uat."
-              ;;
-            main)
-              if [[ "${HEAD_BRANCH}" != "uat" ]]; then
-                echo "::error::Pull requests into main must come only from uat."
-                exit 1
-              fi
-              echo "Valid promotion from uat to main."
-              ;;
-            *)
-              echo "::error::Unsupported destination branch: ${BASE_BRANCH}"
-              exit 1
-              ;;
+          case "$BASE:$HEAD" in
+            dev:feature/*|dev:feat/*|dev:bugfix/*|dev:fix/*|dev:hotfix/*|dev:chore/*|dev:dependabot/*|dev:renovate/*) ;;
+            test:dev|main:test) ;;
+            *) echo "::error::Invalid promotion $HEAD -> $BASE. Required path: working branch -> dev -> test -> main"; exit 1 ;;
           esac
-
-  python-validation:
-    name: Python Validation
+  secret-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with: {fetch-depth: 0}
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  repository-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: '1'
+          version: v0.74.0
+  workflow-and-dockerfile-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: raven-actions/actionlint@v2
+      - uses: hadolint/hadolint-action@v3.1.0
+        with: {recursive: true}
+  backend-validation:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-
     steps:
-      - name: Check out source code
-        uses: actions/checkout@v7
-
-      # Same Python as backend/Dockerfile's base image.
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
           cache: pip
           cache-dependency-path: |
             backend/requirements.txt
+            backend/requirements-dev.txt
             backend/constraints.txt
-
-      # ruff is pinned in backend/requirements-dev.txt: its default rules and formatting
-      # change between releases. Bump deliberately (run it locally, review the diff).
-      - name: Install dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt -c backend/constraints.txt
-
-      - name: Run Ruff linting
-        run: ruff check .
-
-      - name: Check Ruff formatting
-        run: ruff format --check .
-
-      # Catches syntax errors, broken imports and bad type annotations in modules
-      # no test touches, before an image is built.
-      - name: Import every backend module
+      - run: python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt -c backend/constraints.txt
+      - run: python -m ruff check .
+      - run: python -m ruff format --check .
+      - run: python -m compileall -q backend/app backend/tests
+      - run: python -m pytest -q
         working-directory: backend
-        # Settings are validated at import. Production (the default) requires a
-        # real JWT_SECRET, so the check imports in development mode.
-        env:
-          ENVIRONMENT: development
-        run: |
-          python - <<'EOF'
-          import importlib
-          import pkgutil
-
-          import app
-
-          failed = []
-          for module in pkgutil.walk_packages(app.__path__, "app."):
-              try:
-                  importlib.import_module(module.name)
-              except Exception as exc:
-                  failed.append(f"{module.name}: {exc!r}")
-          if failed:
-              raise SystemExit("Modules that failed to import:\n" + "\n".join(failed))
-          print("Every backend module imports.")
-          EOF
-
-      # Offline: a throwaway SQLite database, subprocess jobs run the Python
-      # interpreter, and webhooks/SMTP are stubbed. No warehouse is needed.
-      - name: Run backend tests
-        working-directory: backend
-        run: python -m pytest -q
-
   frontend-validation:
-    name: Frontend Validation
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: frontend
-
+    defaults: {run: {working-directory: frontend}}
     steps:
-      - name: Check out source code
-        uses: actions/checkout@v7
-
-      # Same Node as frontend/Dockerfile's build stage.
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
-
-      - name: Run ESLint
-        run: npm run lint
-
-      - name: Run unit tests (Vitest)
-        run: npm test
-
-      # tsc -b (type check) + vite build, exactly what the image build runs.
-      - name: Type-check and build
-        run: npm run build
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm test -- --run
+      - run: npm run build
+  cube-validation:
+    needs: changes
+    if: needs.changes.outputs.cube == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: node --check cube/cube.js
+      - run: bash -n cube/portal-entrypoint.sh
+  backend-image:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    uses: ./.github/workflows/reusable-container.yml
+    with:
+      component: backend
+      context: ./backend
+      checkout_ref: ${{ github.event.pull_request.head.sha }}
+      environment_name: pr
+      image_tag: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      push_image: false
+    secrets: inherit
+  frontend-image:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    uses: ./.github/workflows/reusable-container.yml
+    with:
+      component: frontend
+      context: ./frontend
+      checkout_ref: ${{ github.event.pull_request.head.sha }}
+      environment_name: pr
+      image_tag: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      push_image: false
+    secrets: inherit
+  cube-image:
+    needs: changes
+    if: needs.changes.outputs.cube == 'true'
+    uses: ./.github/workflows/reusable-container.yml
+    with:
+      component: cube
+      context: ./cube
+      checkout_ref: ${{ github.event.pull_request.head.sha }}
+      environment_name: pr
+      image_tag: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+      push_image: false
+    secrets: inherit

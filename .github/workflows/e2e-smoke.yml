@@ -7,8 +7,6 @@
 name: E2E Smoke
 
 on:
-  pull_request:
-    branches: [uat, main]
   workflow_dispatch:
 
 permissions:

@@ -1,196 +1,117 @@
-# Builds the three images a client actually runs (see deploy/client/) and, outside
-# pull requests, publishes them to GitHub Container Registry:
-#
-#   ghcr.io/<owner>/<repo>-backend
-#   ghcr.io/<owner>/<repo>-frontend
-#   ghcr.io/<owner>/<repo>-cube       (managed semantic layer)
-#
-# Only the images whose side changed are built (see `changes`); tags and manual
-# runs build all three.
-#
-# Triggers:
-#   - pull request to dev,   -> build only (proves the Dockerfiles and the
-#     uat or main              frontend's tsc + vite build still work); no push
-#   - push to main           -> publishes :latest, :main and :sha-<short>
-#   - push a tag v1.2.3      -> publishes :1.2.3, :1.2 and :1
-#   - manual run             -> publishes :<branch> and :sha-<short>
-#
-# First-time setup: none. GITHUB_TOKEN already has permission to push to this
-# repo's own GHCR namespace. Package visibility defaults to private; make it
-# public from the package's GitHub settings once clients should
-# `docker compose pull` without authenticating first.
-#
-# Trivy scans every image before it is pushed, on pull requests too, and fails
-# the run on a HIGH or CRITICAL vulnerability that has a fix available. A
-# finding that cannot be fixed yet (or is a false positive) goes in .trivyignore
-# with a comment saying why and until when.
-name: Publish images
-
+name: Publish Container Images
 on:
-  pull_request:
-    branches: [dev, uat, main]
   push:
-    branches: [main]
-    tags: ["v*.*.*"]
+    branches: [dev, test, main]
   workflow_dispatch:
     inputs:
+      target_environment:
+        required: true
+        type: choice
+        options: [dev, test, prod]
+      git_ref:
+        required: true
+        type: string
+        default: main
+      component:
+        required: true
+        type: choice
+        options: [all, backend, frontend, cube]
+        default: all
       extra_pip_packages:
-        description: 'Extra backend build arg, e.g. "dbt-bigquery~=1.8.0" for a non-Snowflake image variant'
         required: false
+        type: string
         default: ""
-
 permissions:
   contents: read
   packages: write
-
-# A newer push to the same branch/PR supersedes a run still in progress.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
+  pull-requests: read
 jobs:
-  # Which side of the repo this change touches. A job for the other side is
-  # skipped, and a skipped job counts as passed for required status checks.
-  changes:
-    name: Detect changes
+  prepare:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      pull-requests: read
     outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
-      cube: ${{ steps.filter.outputs.cube }}
-      matrix: ${{ steps.pick.outputs.matrix }}
+      environment: ${{ steps.plan.outputs.environment }}
+      ref: ${{ steps.plan.outputs.ref }}
+      sha: ${{ steps.plan.outputs.sha }}
+      backend: ${{ steps.plan.outputs.backend }}
+      frontend: ${{ steps.plan.outputs.frontend }}
+      cube: ${{ steps.plan.outputs.cube }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.sha }}
+          fetch-depth: 2
       - id: filter
-        # A tag or manual run has no previous commit to compare with; it builds them all anyway.
-        if: github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'push'
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            backend:
-              - 'backend/**'
-              - 'ruff.toml'
-              - '.trivyignore'
-              - '.github/workflows/publish-images.yml'
-            frontend:
-              - 'frontend/**'
-              - '.trivyignore'
-              - '.github/workflows/publish-images.yml'
-            # The managed semantic layer (official Cube image + the portal's cube.js).
-            cube:
-              - 'cube/**'
-              - '.trivyignore'
-              - '.github/workflows/publish-images.yml'
-      # Tags and manual runs always build every image (a release ships them all).
-      - id: pick
+            backend: ['backend/**', 'ruff.toml', '.trivyignore', '.github/workflows/**']
+            frontend: ['frontend/**', '.trivyignore', '.github/workflows/**']
+            cube: ['cube/**', '.trivyignore', '.github/workflows/**']
+      - id: plan
         env:
-          ALL: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
-          BACKEND: ${{ steps.filter.outputs.backend }}
-          FRONTEND: ${{ steps.filter.outputs.frontend }}
-          CUBE: ${{ steps.filter.outputs.cube }}
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.ref_name }}
+          M_ENV: ${{ inputs.target_environment }}
+          M_REF: ${{ inputs.git_ref }}
+          M_COMPONENT: ${{ inputs.component }}
+          B: ${{ steps.filter.outputs.backend }}
+          F: ${{ steps.filter.outputs.frontend }}
+          C: ${{ steps.filter.outputs.cube }}
+        shell: bash
         run: |
           set -euo pipefail
-          items=()
-          if [[ "$ALL" == "true" || "$BACKEND" == "true" ]]; then
-            items+=('{"name":"backend","context":"./backend"}')
+          sha=$(git rev-parse --short=12 HEAD)
+          if [[ "$EVENT" == workflow_dispatch ]]; then
+            environment="$M_ENV"; ref="$M_REF"
+            [[ "$M_COMPONENT" == all || "$M_COMPONENT" == backend ]] && B=true || B=false
+            [[ "$M_COMPONENT" == all || "$M_COMPONENT" == frontend ]] && F=true || F=false
+            [[ "$M_COMPONENT" == all || "$M_COMPONENT" == cube ]] && C=true || C=false
+          else
+            ref="$GITHUB_SHA"
+            case "$BRANCH" in dev) environment=dev;; test) environment=test;; main) environment=prod;; *) exit 1;; esac
           fi
-          if [[ "$ALL" == "true" || "$FRONTEND" == "true" ]]; then
-            items+=('{"name":"frontend","context":"./frontend"}')
-          fi
-          if [[ "$ALL" == "true" || "$CUBE" == "true" ]]; then
-            items+=('{"name":"cube","context":"./cube"}')
-          fi
-          echo "matrix=[$(IFS=,; echo "${items[*]}")]" >> "$GITHUB_OUTPUT"
-
-  images:
-    name: ${{ matrix.name }}
-    needs: changes
-    if: needs.changes.outputs.matrix != '[]'
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
-    steps:
-      - uses: actions/checkout@v7
-
-      # Image names must be lowercase; repository names need not be.
-      - name: Compute image name
-        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}-${{ matrix.name }}" >> "$GITHUB_ENV"
-
-      - uses: docker/setup-buildx-action@v4
-
-      - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=ref,event=pr
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=sha-
-
-      # Build once into the local image store, scan it, and only then push, so a
-      # vulnerable image never reaches the registry.
-      - name: Build
-        uses: docker/build-push-action@v7
-        with:
-          context: ${{ matrix.context }}
-          load: true
-          push: false
-          tags: local/${{ matrix.name }}:scan
-          build-args: |
-            EXTRA_PIP_PACKAGES=${{ matrix.name == 'backend' && github.event.inputs.extra_pip_packages || '' }}
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
-
-      - name: Scan for vulnerabilities (Trivy)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: local/${{ matrix.name }}:scan
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          trivyignores: .trivyignore
-          exit-code: "1"
-
-      - id: build
-        name: Push
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v7
-        with:
-          context: ${{ matrix.context }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Only the backend takes this arg (the frontend Dockerfile ignores it).
-          build-args: |
-            EXTRA_PIP_PACKAGES=${{ matrix.name == 'backend' && github.event.inputs.extra_pip_packages || '' }}
-          # Same inputs as the scanned build, so every layer comes from its cache.
-          cache-from: type=gha,scope=${{ matrix.name }}
-
-      - name: Summary
-        if: github.event_name != 'pull_request'
-        run: |
-          {
-            echo "### ${{ matrix.name }} published"
-            echo '```'
-            echo "${{ steps.meta.outputs.tags }}"
-            echo '```'
-            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
-            echo "Client install: deploy/client/ (set IMAGE_REGISTRY=ghcr.io/${GITHUB_REPOSITORY,,} in .env)"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "environment=$environment" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "backend=${B:-false}" >> "$GITHUB_OUTPUT"
+          echo "frontend=${F:-false}" >> "$GITHUB_OUTPUT"
+          echo "cube=${C:-false}" >> "$GITHUB_OUTPUT"
+  backend:
+    needs: prepare
+    if: needs.prepare.outputs.backend == 'true'
+    uses: ./.github/workflows/reusable-container.yml
+    with:
+      component: backend
+      context: ./backend
+      checkout_ref: ${{ needs.prepare.outputs.ref }}
+      environment_name: ${{ needs.prepare.outputs.environment }}
+      image_tag: ${{ needs.prepare.outputs.environment }}-${{ needs.prepare.outputs.sha }}
+      push_image: true
+      build_args: |
+        EXTRA_PIP_PACKAGES=${{ inputs.extra_pip_packages || '' }}
+    secrets: inherit
+  frontend:
+    needs: prepare
+    if: needs.prepare.outputs.frontend == 'true'
+    uses: ./.github/workflows/reusable-container.yml
+    with:
+      component: frontend
+      context: ./frontend
+      checkout_ref: ${{ needs.prepare.outputs.ref }}
+      environment_name: ${{ needs.prepare.outputs.environment }}
+      image_tag: ${{ needs.prepare.outputs.environment }}-${{ needs.prepare.outputs.sha }}
+      push_image: true
+    secrets: inherit
+  cube:
+    needs: prepare
+    if: needs.prepare.outputs.cube == 'true'
+    uses: ./.github/workflows/reusable-container.yml
+    with:
+      component: cube
+      context: ./cube
+      checkout_ref: ${{ needs.prepare.outputs.ref }}
+      environment_name: ${{ needs.prepare.outputs.environment }}
+      image_tag: ${{ needs.prepare.outputs.environment }}-${{ needs.prepare.outputs.sha }}
+      push_image: true
+    secrets: inherit
