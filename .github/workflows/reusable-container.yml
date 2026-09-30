@@ -28,14 +28,12 @@ on:
         default: ""
         type: string
 
-permissions:
-  contents: read
-  packages: write
-
 jobs:
   container:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    environment:
+      name: ${{ inputs.push_image && inputs.environment_name || 'ci' }}
     steps:
       - uses: actions/checkout@v6
         with:
