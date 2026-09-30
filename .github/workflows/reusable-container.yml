@@ -1,0 +1,151 @@
+name: Reusable Container Build, Scan and Publish
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        required: true
+        type: string
+      context:
+        required: true
+        type: string
+      checkout_ref:
+        required: false
+        default: ""
+        type: string
+      environment_name:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+      push_image:
+        required: true
+        type: boolean
+      build_args:
+        description: Optional Docker build arguments
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ inputs.component }}" in backend|frontend|cube) ;; *) exit 1 ;; esac
+          [[ "${{ inputs.context }}" == "./backend" || "${{ inputs.context }}" == "./frontend" || "${{ inputs.context }}" == "./cube" ]]
+          [[ "${{ inputs.image_tag }}" =~ ^(dev|test|prod|pr-[0-9]+)-[a-f0-9]{7,40}$ ]]
+
+      - name: Set image names
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}-${{ inputs.component }}"
+          echo "LOCAL_IMAGE=local/${{ inputs.component }}:${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "REMOTE_IMAGE=${image}:${{ inputs.image_tag }}" >> "$GITHUB_ENV"
+
+      - name: Scan source
+        id: source_scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ inputs.context }}
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          format: table
+          output: source-trivy-report.txt
+          exit-code: "1"
+          version: v0.74.0
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image once
+        id: image_build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          load: true
+          push: false
+          tags: ${{ env.LOCAL_IMAGE }}
+          build-args: ${{ inputs.build_args }}
+          cache-from: type=gha,scope=${{ inputs.component }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.component }}
+
+      - name: Scan built image
+        id: image_scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          version: v0.74.0
+          format: table
+          output: image-trivy-report.txt
+          exit-code: "1"
+
+      - name: Sign in to GHCR
+        id: registry_login
+        if: inputs.push_image
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push exact scanned image
+        id: image_push
+        if: inputs.push_image
+        shell: bash
+        run: |
+          docker tag "$LOCAL_IMAGE" "$REMOTE_IMAGE"
+          docker push "$REMOTE_IMAGE"
+
+      - name: Notify Microsoft Teams
+        if: inputs.push_image && always()
+        continue-on-error: true
+        env:
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          JOB_STATUS: ${{ job.status }}
+          SOURCE_SCAN: ${{ steps.source_scan.outcome }}
+          IMAGE_BUILD: ${{ steps.image_build.outcome }}
+          IMAGE_SCAN: ${{ steps.image_scan.outcome }}
+          REGISTRY_LOGIN: ${{ steps.registry_login.outcome }}
+          IMAGE_PUSH: ${{ steps.image_push.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${TEAMS_WEBHOOK_URL:-}" ]] || exit 0
+          failed_stage="none"
+          [[ "$SOURCE_SCAN" == failure ]] && failed_stage="source vulnerability scan"
+          [[ "$IMAGE_BUILD" == failure ]] && failed_stage="Docker build"
+          [[ "$IMAGE_SCAN" == failure ]] && failed_stage="image vulnerability scan"
+          [[ "$REGISTRY_LOGIN" == failure ]] && failed_stage="GHCR login"
+          [[ "$IMAGE_PUSH" == failure ]] && failed_stage="GHCR push"
+          report=""
+          [[ "$SOURCE_SCAN" == failure && -f source-trivy-report.txt ]] && report="$(tail -n 60 source-trivy-report.txt | head -c 5000)"
+          [[ "$IMAGE_SCAN" == failure && -f image-trivy-report.txt ]] && report="$(tail -n 60 image-trivy-report.txt | head -c 5000)"
+          payload=$(jq -n             --arg status "$JOB_STATUS"             --arg repository "$GITHUB_REPOSITORY"             --arg component "${{ inputs.component }}"             --arg environment "${{ inputs.environment_name }}"             --arg image "$REMOTE_IMAGE"             --arg commit "$GITHUB_SHA"             --arg actor "$GITHUB_ACTOR"             --arg failedStage "$failed_stage"             --arg workflowUrl "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"             --arg scanReport "$report"             '{status:$status,repository:$repository,component:$component,environment:$environment,image:$image,commit:$commit,actor:$actor,failedStage:$failedStage,workflowUrl:$workflowUrl,scanReport:$scanReport}')
+          curl --fail-with-body --silent --show-error --retry 3 --retry-all-errors             -H "Content-Type: application/json" -d "$payload" "$TEAMS_WEBHOOK_URL"
+
+      - name: Remove local images and reports
+        if: always()
+        shell: bash
+        run: |
+          docker image rm "${REMOTE_IMAGE:-not-set}" 2>/dev/null || true
+          docker image rm "${LOCAL_IMAGE:-not-set}" 2>/dev/null || true
+          rm -f source-trivy-report.txt image-trivy-report.txt
