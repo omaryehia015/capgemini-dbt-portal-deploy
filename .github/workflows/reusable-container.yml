@@ -58,6 +58,7 @@ jobs:
 
       - name: Scan source
         id: source_scan
+        if: inputs.component != 'cube'
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
@@ -116,11 +117,12 @@ jobs:
           docker push "$REMOTE_IMAGE"
 
       - name: Notify Microsoft Teams
-        if: inputs.push_image && always()
+        if: always()
         continue-on-error: true
         env:
           TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
           JOB_STATUS: ${{ job.status }}
+          PUSH_IMAGE: ${{ inputs.push_image }}
           SOURCE_SCAN: ${{ steps.source_scan.outcome }}
           IMAGE_BUILD: ${{ steps.image_build.outcome }}
           IMAGE_SCAN: ${{ steps.image_scan.outcome }}
@@ -129,7 +131,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${TEAMS_WEBHOOK_URL:-}" ]] || exit 0
+          if [[ -z "${TEAMS_WEBHOOK_URL:-}" ]]; then
+            echo "::warning::TEAMS_WEBHOOK_URL is not configured; skipping Teams notification."
+            exit 0
+          fi
           failed_stage="none"
           [[ "$SOURCE_SCAN" == failure ]] && failed_stage="source vulnerability scan"
           [[ "$IMAGE_BUILD" == failure ]] && failed_stage="Docker build"
@@ -139,7 +144,44 @@ jobs:
           report=""
           [[ "$SOURCE_SCAN" == failure && -f source-trivy-report.txt ]] && report="$(tail -n 60 source-trivy-report.txt | head -c 5000)"
           [[ "$IMAGE_SCAN" == failure && -f image-trivy-report.txt ]] && report="$(tail -n 60 image-trivy-report.txt | head -c 5000)"
-          payload=$(jq -n             --arg status "$JOB_STATUS"             --arg repository "$GITHUB_REPOSITORY"             --arg component "${{ inputs.component }}"             --arg environment "${{ inputs.environment_name }}"             --arg image "$REMOTE_IMAGE"             --arg commit "$GITHUB_SHA"             --arg actor "$GITHUB_ACTOR"             --arg failedStage "$failed_stage"             --arg workflowUrl "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"             --arg scanReport "$report"             '{status:$status,repository:$repository,component:$component,environment:$environment,image:$image,commit:$commit,actor:$actor,failedStage:$failedStage,workflowUrl:$workflowUrl,scanReport:$scanReport}')
+          payload=$(jq -n \
+            --arg status "$JOB_STATUS" \
+            --arg pushed "$PUSH_IMAGE" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg component "${{ inputs.component }}" \
+            --arg environment "${{ inputs.environment_name }}" \
+            --arg image "${REMOTE_IMAGE:-not set}" \
+            --arg commit "$GITHUB_SHA" \
+            --arg actor "$GITHUB_ACTOR" \
+            --arg failedStage "$failed_stage" \
+            --arg workflowUrl "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg scanReport "$report" \
+            '{
+              "@type": "MessageCard",
+              "@context": "https://schema.org/extensions",
+              "summary": ("Container pipeline " + $status),
+              "themeColor": (if $status == "success" then "2EB886" else "D13438" end),
+              "title": ("Container pipeline " + ($status | ascii_upcase)),
+              "sections": [{
+                "facts": [
+                  {"name": "Repository", "value": $repository},
+                  {"name": "Component", "value": $component},
+                  {"name": "Environment", "value": $environment},
+                  {"name": "Image", "value": $image},
+                  {"name": "Commit", "value": $commit},
+                  {"name": "Triggered by", "value": $actor}
+                ],
+                "text": (if $status == "success"
+                  then (if $pushed == "true" then "Image passed its scans and was published." else "Image passed its scans; this validation run did not publish an image." end)
+                  else "Failed stage: " + $failedStage + (if $scanReport == "" then "" else "\\n\\n" + $scanReport end)
+                  end)
+              }],
+              "potentialAction": [{
+                "@type": "OpenUri",
+                "name": "View workflow run",
+                "targets": [{"os": "default", "uri": $workflowUrl}]
+              }]
+            }')
           curl --fail-with-body --silent --show-error --retry 3 --retry-all-errors             -H "Content-Type: application/json" -d "$payload" "$TEAMS_WEBHOOK_URL"
 
       - name: Remove local images and reports

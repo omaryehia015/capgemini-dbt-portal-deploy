@@ -1,21 +1,16 @@
-name: Publish Container Images
+name: Publish Container Images (Reusable)
 on:
-  push:
-    branches: [dev, test, main]
-  workflow_dispatch:
+  workflow_call:
     inputs:
       target_environment:
         required: true
-        type: choice
-        options: [dev, test, prod]
-      git_ref:
+        type: string
+      source_ref:
         required: true
         type: string
-        default: main
       component:
-        required: true
-        type: choice
-        options: [all, backend, frontend, cube]
+        required: false
+        type: string
         default: all
       extra_pip_packages:
         required: false
@@ -38,22 +33,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.sha }}
+          ref: ${{ inputs.source_ref }}
           fetch-depth: 2
       - id: filter
         if: github.event_name == 'push'
         uses: dorny/paths-filter@v3
         with:
           filters: |
-            backend: ['backend/**', 'ruff.toml', '.trivyignore', '.github/workflows/**']
-            frontend: ['frontend/**', '.trivyignore', '.github/workflows/**']
-            cube: ['cube/**', '.trivyignore', '.github/workflows/**']
+            backend: ['backend/**', 'ruff.toml', '.trivyignore']
+            frontend: ['frontend/**', '.trivyignore']
+            cube: ['cube/**', '.trivyignore']
       - id: plan
         env:
           EVENT: ${{ github.event_name }}
-          BRANCH: ${{ github.ref_name }}
           M_ENV: ${{ inputs.target_environment }}
-          M_REF: ${{ inputs.git_ref }}
+          M_REF: ${{ inputs.source_ref }}
           M_COMPONENT: ${{ inputs.component }}
           B: ${{ steps.filter.outputs.backend }}
           F: ${{ steps.filter.outputs.frontend }}
@@ -62,14 +56,12 @@ jobs:
         run: |
           set -euo pipefail
           sha=$(git rev-parse --short=12 HEAD)
+          environment="$M_ENV"; ref="$M_REF"
           if [[ "$EVENT" == workflow_dispatch ]]; then
-            environment="$M_ENV"; ref="$M_REF"
+            case "$M_COMPONENT" in all|backend|frontend|cube) ;; *) echo "::error::Invalid component: $M_COMPONENT"; exit 1 ;; esac
             [[ "$M_COMPONENT" == all || "$M_COMPONENT" == backend ]] && B=true || B=false
             [[ "$M_COMPONENT" == all || "$M_COMPONENT" == frontend ]] && F=true || F=false
             [[ "$M_COMPONENT" == all || "$M_COMPONENT" == cube ]] && C=true || C=false
-          else
-            ref="$GITHUB_SHA"
-            case "$BRANCH" in dev) environment=dev;; test) environment=test;; main) environment=prod;; *) exit 1;; esac
           fi
           echo "environment=$environment" >> "$GITHUB_OUTPUT"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"

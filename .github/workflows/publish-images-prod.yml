@@ -1,0 +1,46 @@
+name: Publish Production Images
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['.github/workflows/**']
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Component to build and publish
+        required: true
+        type: choice
+        options: [all, backend, frontend, cube]
+        default: all
+      extra_pip_packages:
+        description: Optional extra backend packages
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: read
+
+jobs:
+  validate-ref:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the main branch
+        env:
+          ACTUAL_BRANCH: ${{ github.ref_name }}
+        run: |
+          if [[ "$ACTUAL_BRANCH" != main ]]; then
+            echo "::error::Run this workflow from the main branch; selected ref was $ACTUAL_BRANCH."
+            exit 1
+          fi
+  publish:
+    needs: validate-ref
+    uses: ./.github/workflows/publish-images.yml
+    with:
+      target_environment: prod
+      source_ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.sha }}
+      component: ${{ inputs.component || 'all' }}
+      extra_pip_packages: ${{ inputs.extra_pip_packages || '' }}
+    secrets: inherit
