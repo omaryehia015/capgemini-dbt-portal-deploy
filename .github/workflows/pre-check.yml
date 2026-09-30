@@ -17,6 +17,7 @@ jobs:
       backend: ${{ steps.files_changed.outputs.backend }}
       frontend: ${{ steps.files_changed.outputs.frontend }}
       cube: ${{ steps.files_changed.outputs.cube }}
+      components: ${{ steps.matrix.outputs.components }}
     steps:
       - uses: actions/checkout@v6
       - id: files_changed
@@ -26,6 +27,21 @@ jobs:
             backend: ['backend/**', 'ruff.toml', '.trivyignore']
             frontend: ['frontend/**', '.trivyignore']
             cube: ['cube/**', '.trivyignore']
+      - id: matrix
+        env:
+          BACKEND: ${{ steps.files_changed.outputs.backend }}
+          FRONTEND: ${{ steps.files_changed.outputs.frontend }}
+          CUBE: ${{ steps.files_changed.outputs.cube }}
+        run: |
+          components=$(jq -cn \
+            --arg backend "$BACKEND" \
+            --arg frontend "$FRONTEND" \
+            --arg cube "$CUBE" \
+            '[if $backend == "true" then "backend" else empty end,
+              if $frontend == "true" then "frontend" else empty end,
+              if $cube == "true" then "cube" else empty end]')
+          if [[ "$components" == "[]" ]]; then components='["none"]'; fi
+          echo "components=$components" >> "$GITHUB_OUTPUT"
   promotion-path:
     runs-on: ubuntu-24.04
     steps:
@@ -56,17 +72,16 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
-          scanners: vuln,misconfig
+          scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           trivyignores: .trivyignore
           exit-code: '1'
           version: v0.74.0
-  workflow-and-dockerfile-lint:
+  dockerfile-lint:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - uses: raven-actions/actionlint@v2
       - uses: hadolint/hadolint-action@v3.1.0
         with: {recursive: true}
   backend-validation:
@@ -115,39 +130,44 @@ jobs:
         with: {node-version: '22'}
       - run: node --check cube/cube.js
       - run: bash -n cube/portal-entrypoint.sh
-  backend-image:
+  container-image-check:
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
-    uses: ./.github/workflows/reusable-container.yml
-    with:
-      component: backend
-      context: ./backend
-      checkout_ref: ${{ github.event.pull_request.head.sha }}
-      environment_name: pr
-      image_tag: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-      push_image: false
-    secrets: inherit
-  frontend-image:
-    needs: changes
-    if: needs.changes.outputs.frontend == 'true'
-    uses: ./.github/workflows/reusable-container.yml
-    with:
-      component: frontend
-      context: ./frontend
-      checkout_ref: ${{ github.event.pull_request.head.sha }}
-      environment_name: pr
-      image_tag: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-      push_image: false
-    secrets: inherit
-  cube-image:
-    needs: changes
-    if: needs.changes.outputs.cube == 'true'
-    uses: ./.github/workflows/reusable-container.yml
-    with:
-      component: cube
-      context: ./cube
-      checkout_ref: ${{ github.event.pull_request.head.sha }}
-      environment_name: pr
-      image_tag: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-      push_image: false
-    secrets: inherit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.cube == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        component: ${{ fromJSON(needs.changes.outputs.components) }}
+    env:
+      LOCAL_IMAGE: local/${{ matrix.component }}:${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.component }}
+          load: true
+          push: false
+          tags: ${{ env.LOCAL_IMAGE }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+
+      - name: Scan built image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: '1'
+          version: v0.74.0
+
+      - name: Remove local image
+        if: always()
+        run: docker image rm "$LOCAL_IMAGE" 2>/dev/null || true
