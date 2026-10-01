@@ -497,6 +497,7 @@ and `backend/app/services/snowflake.py` are the source of truth.
 | `DBT_PKG_ACCOUNT` / `_USER` / `_PASSWORD` / `_ROLE` / `_WAREHOUSE` / `_DATABASE` | — | Warehouse credentials, read by both `profiles.yml` (via `env_var`) and the portal's Snowflake pages. |
 | `CORS_ORIGINS` | `["http://localhost:5173"]` | Only relevant if the frontend is served from a different origin than the backend (not the case for the compose/Kubernetes/VM setups above, which proxy same-origin). |
 | `AIRFLOW_URL` / `AIRFLOW_WEBSERVER_URL` | — | Default URL shown on the Airflow page; users can still enter one at runtime. |
+| `AIRFLOW_UPSTREAM` | — | Frontend container: `host:port` of an Airflow webserver to serve under `/airflow-ui/` on the portal's origin, so the Airflow page can embed it (a cross-site iframe loses Airflow's session cookie and its login fails with "CSRF session token is missing"). Airflow must run with `AIRFLOW__WEBSERVER__BASE_URL=http://<portal host>/airflow-ui`. |
 | `AIRBYTE_URL` | — | Airbyte root the backend calls (section 5a): `http://host.docker.internal:8000` for `abctl` on the same host, `https://api.airbyte.com/v1` for Airbyte Cloud. Unset = the Airbyte page shows the install steps. |
 | `AIRBYTE_CLIENT_ID` / `AIRBYTE_CLIENT_SECRET` | — | API application credentials (`abctl local credentials`, or an Airbyte Cloud application). Only omit for an install with auth disabled. |
 | `AIRBYTE_WORKSPACE_ID` | all workspaces | Limit the Airbyte page to one workspace. |
