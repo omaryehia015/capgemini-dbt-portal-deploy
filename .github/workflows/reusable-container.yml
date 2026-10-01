@@ -22,6 +22,11 @@ on:
       push_image:
         required: true
         type: boolean
+      tag_latest:
+        description: Also push the scanned image as :latest (what portal.py pulls by default)
+        required: false
+        default: false
+        type: boolean
       build_args:
         description: Optional Docker build arguments
         required: false
@@ -53,6 +58,7 @@ jobs:
           image="ghcr.io/${GITHUB_REPOSITORY,,}-${{ inputs.component }}"
           echo "LOCAL_IMAGE=local/${{ inputs.component }}:${GITHUB_SHA}" >> "$GITHUB_ENV"
           echo "REMOTE_IMAGE=${image}:${{ inputs.image_tag }}" >> "$GITHUB_ENV"
+          echo "LATEST_IMAGE=${image}:latest" >> "$GITHUB_ENV"
 
       - name: Scan source
         id: source_scan
@@ -113,6 +119,10 @@ jobs:
         run: |
           docker tag "$LOCAL_IMAGE" "$REMOTE_IMAGE"
           docker push "$REMOTE_IMAGE"
+          if [[ "${{ inputs.tag_latest }}" == true ]]; then
+            docker tag "$LOCAL_IMAGE" "$LATEST_IMAGE"
+            docker push "$LATEST_IMAGE"
+          fi
 
       - name: Notify Microsoft Teams
         if: always()

@@ -80,6 +80,7 @@ jobs:
       environment_name: ${{ needs.prepare.outputs.environment }}
       image_tag: ${{ needs.prepare.outputs.environment }}-${{ needs.prepare.outputs.sha }}
       push_image: true
+      tag_latest: ${{ needs.prepare.outputs.environment == 'prod' }}
       build_args: |
         EXTRA_PIP_PACKAGES=${{ inputs.extra_pip_packages || '' }}
     secrets: inherit
@@ -94,6 +95,7 @@ jobs:
       environment_name: ${{ needs.prepare.outputs.environment }}
       image_tag: ${{ needs.prepare.outputs.environment }}-${{ needs.prepare.outputs.sha }}
       push_image: true
+      tag_latest: ${{ needs.prepare.outputs.environment == 'prod' }}
     secrets: inherit
   cube:
     needs: prepare
@@ -106,4 +108,5 @@ jobs:
       environment_name: ${{ needs.prepare.outputs.environment }}
       image_tag: ${{ needs.prepare.outputs.environment }}-${{ needs.prepare.outputs.sha }}
       push_image: true
+      tag_latest: ${{ needs.prepare.outputs.environment == 'prod' }}
     secrets: inherit
