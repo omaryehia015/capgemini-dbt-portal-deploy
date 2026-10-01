@@ -197,5 +197,6 @@ jobs:
         shell: bash
         run: |
           docker image rm "${REMOTE_IMAGE:-not-set}" 2>/dev/null || true
+          docker image rm "${LATEST_IMAGE:-not-set}" 2>/dev/null || true
           docker image rm "${LOCAL_IMAGE:-not-set}" 2>/dev/null || true
           rm -f source-trivy-report.txt image-trivy-report.txt
