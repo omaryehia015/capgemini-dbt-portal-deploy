@@ -38,4 +38,4 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - run: shellcheck -S warning deploy/client/setup.sh
+      - run: shellcheck -x -S warning deploy/client/setup.sh deploy/client/manage.sh deploy/client/install.sh deploy/client/lib.sh

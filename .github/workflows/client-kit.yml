@@ -5,7 +5,8 @@
 #   dbt-portal-client-kit-<release>.zip
 #     compose.yaml  compose.single.yaml  .env.example  releases.yml
 #     postgres/init-databases.sql
-#     setup.sh  setup.ps1  README.md
+#     setup.sh  setup.ps1  manage.sh  manage.ps1  lib.sh  lib.ps1
+#     install.sh  install.ps1  portal.answers.example  README.md
 #
 # Attached to a GitHub release named portal-<release> in this repo.
 name: Client Kit
@@ -45,8 +46,10 @@ jobs:
           mkdir -p "$kit/postgres"
           cp compose.yaml compose.single.yaml .env.example releases.yml "$kit/"
           cp postgres/init-databases.sql "$kit/postgres/"
-          cp deploy/client/setup.sh deploy/client/setup.ps1 deploy/client/README.md "$kit/"
-          chmod +x "$kit/setup.sh"
+          for f in setup.sh setup.ps1 manage.sh manage.ps1 lib.sh lib.ps1 install.sh install.ps1                    portal.answers.example README.md; do
+            cp "deploy/client/$f" "$kit/"
+          done
+          chmod +x "$kit"/*.sh
           # The kit's .env.example starts on this release's images.
           read -r backend frontend cube < <(python3 -c "
           import yaml; x = yaml.safe_load(open('releases.yml'))['releases']['$release']

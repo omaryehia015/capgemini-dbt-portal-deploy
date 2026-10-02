@@ -1,0 +1,22 @@
+# Answers for a zero-touch install:
+#   ./setup.sh --answers portal.answers        (macOS, Linux, WSL, VMs)
+#   .\setup.ps1 -Answers portal.answers        (Windows)
+#
+# PROJECT, PORT, RELEASE and WORKERS are setup options. Every other line is
+# written to .env as is. Secrets are generated when missing; never put the
+# warehouse credentials here (they stay in the dbt project's own .env).
+
+PROJECT=/srv/dbt/my-dbt-project
+PORT=8080
+RELEASE=latest
+WORKERS=2
+
+# Optional modules: bundled | external | off. Without a mode, a module whose
+# URL is set is external and any other is off. The portal's Modules page can
+# change these later.
+AIRFLOW_MODE=external
+AIRFLOW_URL=http://airflow.internal:8080
+AIRFLOW_USERNAME=portal
+AIRFLOW_PASSWORD=change-me
+
+AIRBYTE_MODE=off

@@ -20,6 +20,24 @@ You need:
 - A registry username and read-only token, if the images are private. The
   script asks for them the first time.
 
+**Straight from the internet** (downloads this kit, then runs the setup below):
+
+```bash
+# macOS / Linux / WSL / a Linux VM
+curl -fsSL https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.sh   | bash -s -- ~/work/my-dbt-project
+```
+
+```powershell
+# Windows
+$env:PORTAL_PROJECT = "C:\work\my-dbt-project"
+irm https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.ps1 | iex
+```
+
+While the deploy repository is private, set `GITHUB_TOKEN` first. `PORTAL_RELEASE`
+picks a release and `PORTAL_DIR` the folder (default `~/dbt-portal`).
+
+**From the unpacked kit:**
+
 **Windows (PowerShell):**
 
 ```powershell
@@ -47,9 +65,16 @@ GENERATED INITIAL CREDENTIALS (shown once; change them after first login)
   ...
 ```
 
-Open the address, sign in as `admin`, change the password under **My
-account**, then open **Onboarding** and run its steps. The portal doesn't
-install packages (`dbt deps`) or build anything until you run those steps.
+Open the address it prints (`/setup`) and sign in as `admin`. The **Setup
+Assistant** walks through the workspace name, the warehouse connection, the
+dbt project (packages, metadata database, reports), the modules (Airbyte,
+Airflow, ...) and inviting your team. Change the admin password under **My
+account**. The portal doesn't install packages (`dbt deps`) or build anything
+until you run those steps.
+
+Before installing, `./setup.sh --check` (or `.\setup.ps1 -Check`) only checks
+the machine: OS, CPU, memory, disk and Docker/Podman, with the install command
+for anything missing.
 
 | Option | Windows | Linux / macOS |
 |---|---|---|
@@ -57,6 +82,8 @@ install packages (`dbt deps`) or build anything until you run those steps.
 | A specific portal release (see `releases.yml`) | `-Release 2026.10.0` | `--release 2026.10.0` |
 | Run more dbt jobs at once | `-Workers 3` | `--workers 3` |
 | Images already loaded with `docker load` (no registry) | `-SkipPull` | `--skip-pull` |
+| No questions: everything from a file (`portal.answers.example`) | `-Answers portal.answers` | `--answers portal.answers` |
+| Only check this machine | `-Check` | `--check` |
 
 Run the script again at any time to upgrade (`--release <newer>`) or change
 the port. Accounts, run history and settings are kept.
@@ -85,32 +112,43 @@ For sign-in with your company directory (LDAP), emailed sign-in codes, AI
 keys and similar settings, edit `.env` next to the script (the commented
 lines explain each one) and run the script again.
 
-**Data ingestion (Airbyte):** install Airbyte on the same server with
-`abctl local install --host <this-server>`, put the `AIRBYTE_*` lines in
-`.env` (the id/secret come from `abctl local credentials`) and run the script
-again. The portal's **Airbyte** page then lists your connections and runs
-syncs; **Tools & Services** shows whether every integration is working.
+**Modules (Airbyte, Airflow):** open **Modules** in
+the portal. Each module is *connected* to an instance you already run, or
+*off* (its pages disappear). The module page has the install commands for
+running it on this server, a form for the URL and credentials, and **Test
+connection**, which checks each step (reachable, signed in, can see data).
+For a zero-touch install, put `AIRFLOW_MODE`, `AIRFLOW_URL`... in the answers
+file or `.env` instead (see `.env.example`).
 
 ## Managing it
 
-From the folder with `compose.yaml` (use `podman compose` if that's what you run):
+From the folder with `compose.yaml` (on Windows: `.\manage.ps1 <command>`):
 
 ```bash
-docker compose ps                         # every service and whether it is healthy
-docker compose logs -f execution worker   # dbt runs
-docker compose up -d --scale worker=3     # more dbt jobs at once
-docker compose stop                       # stop (docker compose start to resume)
+./manage.sh status              # every service, whether the portal answers, the modules
+./manage.sh logs execution      # follow a service's log (all of them without a name)
+./manage.sh restart worker      # restart one service (or all of them)
+./manage.sh stop | start        # stop everything, start again
+./manage.sh doctor              # check this machine, the containers and the project
+./manage.sh upgrade 2026.11.0   # move to a release from releases.yml (default: latest)
+./manage.sh backup              # dump the portal databases to backups/
+./manage.sh services            # what each service does
 ```
 
-- **Lost the first passwords:** another admin can set a new one in
-  Governance → Users. `docker compose logs identity` still shows them until
-  the container is recreated.
-- **Something looks wrong:** `docker compose ps` shows which service is not
-  healthy; read its log. The execution service's log starts with an
-  `[OK]`/`[WARN]`/`[FAIL]` self-check of the project, the warehouse
-  connection and the configuration.
-- **Uninstall:** `docker compose down -v` (deletes the accounts and history).
-  Your dbt project is never deleted.
+More dbt jobs at once: `./setup.sh <project> --workers 3`.
+
+### Troubleshooting
+
+| What you see | What to do |
+|---|---|
+| `doctor` says Docker/Podman is not running | Start Docker Desktop / Podman Desktop, then run the command again. |
+| A service is `unhealthy` or keeps restarting | `./manage.sh logs <service>`. The execution service's log starts with an `[OK]`/`[WARN]`/`[FAIL]` self-check of the project, the warehouse connection and the configuration. |
+| The portal does not answer | `./manage.sh logs frontend execution`; check nothing else uses the port (`--port 8081` to move it). |
+| Lost the first passwords | Another admin sets a new one in Governance → Users. `./manage.sh logs identity` still shows them until the container is recreated. |
+| A module's Test connection fails | The failing line says why; its setup guide on the module page lists the usual fixes. |
+
+**Uninstall:** `docker compose down -v` (deletes the accounts and history).
+Your dbt project is never deleted.
 
 ## Just one laptop?
 
