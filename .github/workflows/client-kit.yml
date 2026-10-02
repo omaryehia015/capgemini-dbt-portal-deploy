@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: Release from releases.yml (default: latest)
+        description: "Release from releases.yml (default: latest)"
         required: false
         type: string
 
