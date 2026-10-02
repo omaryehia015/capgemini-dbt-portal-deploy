@@ -49,7 +49,12 @@ $keep = { param($k) if ($old[$k]) { $old[$k] } else { Secret } }
 
 # podman prints a notice on stderr; that is not a failure, so judge by the exit code.
 $ErrorActionPreference = "Continue"
-& $compose[0] $compose[1..($compose.Length - 1)] up --build -d 2>&1 | ForEach-Object { "$_" }
+# One image at a time: building them all in parallel can exhaust a small Podman VM.
+foreach ($svc in "identity", "execution", "insights", "semantic", "cube", "frontend") {
+    & $compose[0] $compose[1..($compose.Length - 1)] build $svc 2>&1 | ForEach-Object { "$_" }
+    if ($LASTEXITCODE -ne 0) { throw "build of $svc failed" }
+}
+& $compose[0] $compose[1..($compose.Length - 1)] up -d 2>&1 | ForEach-Object { "$_" }
 if ($LASTEXITCODE -ne 0) { throw "compose failed" }
 Write-Host "`nPortal: http://localhost:$Port   (admin / admin123!)" -ForegroundColor Green
 Write-Host "Stop:   .\run-local.ps1 -Down"
