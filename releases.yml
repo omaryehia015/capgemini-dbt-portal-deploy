@@ -16,8 +16,17 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     semantic service's contract (GET /api/version, cube_contract)
-latest: "2026.10.0"
+latest: "2026.10.1"
 releases:
+  "2026.10.1":
+    backend: "1.0.1"
+    frontend: "1.0.0"
+    cube: "1.0.1"
+    notes: >-
+      Fixes from smoke testing 2026.10.0: a new warehouse login or model is
+      verified only after Cube has applied it; an identity outage no longer
+      signs users out (503, recently seen users keep working); faster
+      recovery after a Redis restart.
   "2026.10.0":
     backend: "1.0.0"
     frontend: "1.0.0"
