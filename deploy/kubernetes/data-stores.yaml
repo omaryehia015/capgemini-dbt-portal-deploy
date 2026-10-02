@@ -1,0 +1,103 @@
+# Single-pod PostgreSQL and Redis, so the stack runs anywhere out of the box.
+# For production use the platform's managed services instead (Azure Database
+# for PostgreSQL, RDS, Cloud SQL; Azure Cache for Redis, ElastiCache,
+# Memorystore): remove this file from kustomization.yaml and point
+# DATABASE_URL_* / REDIS_URL in secrets.env at them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dbt-portal-postgres-init
+data:
+  10-databases.sql: |
+    CREATE DATABASE portal_identity OWNER portal;
+    CREATE DATABASE portal_execution OWNER portal;
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dbt-portal-postgres
+  labels: { app: dbt-portal, component: postgres }
+spec:
+  serviceName: dbt-portal-postgres
+  replicas: 1
+  selector:
+    matchLabels: { app: dbt-portal, component: postgres }
+  template:
+    metadata:
+      labels: { app: dbt-portal, component: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: docker.io/library/postgres:17-alpine
+          env:
+            - { name: POSTGRES_USER, value: portal }
+            - { name: POSTGRES_DB, value: portal }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: dbt-portal-secrets, key: POSTGRES_PASSWORD } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ containerPort: 5432 }]
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "portal", "-d", "portal"] }
+            periodSeconds: 10
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 1Gi }
+      volumes:
+        - name: init
+          configMap: { name: dbt-portal-postgres-init }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dbt-portal-postgres
+  labels: { app: dbt-portal, component: postgres }
+spec:
+  selector: { app: dbt-portal, component: postgres }
+  ports: [{ port: 5432, targetPort: 5432 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbt-portal-redis
+  labels: { app: dbt-portal, component: redis }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dbt-portal, component: redis }
+  template:
+    metadata:
+      labels: { app: dbt-portal, component: redis }
+    spec:
+      containers:
+        - name: redis
+          image: docker.io/library/redis:7-alpine
+          # Nothing in Redis has to survive a restart: run history is in
+          # PostgreSQL, and the job queue drains in milliseconds.
+          args: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)", "--save", "", "--appendonly", "no"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: dbt-portal-secrets, key: REDIS_PASSWORD } }
+          ports: [{ containerPort: 6379 }]
+          readinessProbe:
+            tcpSocket: { port: 6379 }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dbt-portal-redis
+  labels: { app: dbt-portal, component: redis }
+spec:
+  selector: { app: dbt-portal, component: redis }
+  ports: [{ port: 6379, targetPort: 6379 }]

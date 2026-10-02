@@ -1,0 +1,46 @@
+# Build the images from the sibling repos instead of pulling them, for
+# developing across services:
+#
+#   docker compose -f compose.yaml -f compose.build.yaml up --build -d
+#
+# Expects the repos checked out next to this one:
+#   ../capgemini-dbt-portal-backend  ../capgemini-dbt-portal-frontend  ../capgemini-dbt-portal-cube
+x-backend-build: &backend-build
+  context: ../capgemini-dbt-portal-backend
+  args:
+    APP_VERSION: local
+    EXTRA_PIP_PACKAGES: ${EXTRA_PIP_PACKAGES:-}
+
+services:
+  identity:
+    image: capgemini-dbt-portal-identity:source
+    build:
+      <<: *backend-build
+      args: { SERVICE: identity, APP_VERSION: local }
+  execution:
+    image: capgemini-dbt-portal-backend:source
+    build:
+      <<: *backend-build
+      args: { SERVICE: all, APP_VERSION: local, EXTRA_PIP_PACKAGES: "${EXTRA_PIP_PACKAGES:-}" }
+  worker:
+    image: capgemini-dbt-portal-backend:source
+  insights:
+    image: capgemini-dbt-portal-insights:source
+    build:
+      <<: *backend-build
+      args: { SERVICE: insights, APP_VERSION: local }
+  semantic:
+    image: capgemini-dbt-portal-semantic:source
+    build:
+      <<: *backend-build
+      args: { SERVICE: semantic, APP_VERSION: local }
+  cube:
+    image: capgemini-dbt-portal-cube:source
+    build:
+      context: ../capgemini-dbt-portal-cube
+      args: { APP_VERSION: local }
+  frontend:
+    image: capgemini-dbt-portal-frontend:source
+    build:
+      context: ../capgemini-dbt-portal-frontend
+      args: { APP_VERSION: local }

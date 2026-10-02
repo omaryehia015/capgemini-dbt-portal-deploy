@@ -1,185 +1,75 @@
-# Capgemini dbt Portal (FastAPI + React)
+# Capgemini dbt Portal: deployment
 
-Standalone replacement for the Streamlit-based `streamlit_dashboard/` portal in
-`capgemini_dbt_core`. **The Streamlit app stays live and is the system of
-record until this app covers feature parity** — see Status below.
+How the portal's services are run together: compose files, the client kit,
+Kubernetes manifests, and the list of releases. The code lives in three
+repos, each released on its own:
 
-## Why this exists
+| Repo | What | Images |
+|---|---|---|
+| [capgemini-dbt-portal-backend](https://github.com/omaryehia015/capgemini-dbt-portal-backend) | FastAPI services: identity, execution (+ workers), insights, semantic | `-backend`, `-identity`, `-insights`, `-semantic` |
+| [capgemini-dbt-portal-frontend](https://github.com/omaryehia015/capgemini-dbt-portal-frontend) | React app + the gateway (nginx) | `-frontend` |
+| [capgemini-dbt-portal-cube](https://github.com/omaryehia015/capgemini-dbt-portal-cube) | Cube, the semantic engine | `-cube` |
+| this repo | how they run together, and which versions go together | none |
 
-The old portal fought Streamlit's rerun model for anything long-running
-(background dbt jobs, live log output) and had no real session/cookie API,
-forcing workarounds (`st.fragment(run_every=2)` polling, an iframe
-`document.cookie` hack). This app replaces both with what the framework
-naturally gives you: WebSocket push for live output, real `Authorization`
-headers/JWTs for auth.
+Images are published to `ghcr.io/omaryehia015/capgemini-dbt-portal-<name>`.
+How the services fit together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-Same env-var contract as the old portal, so it points at any client dbt
-project without code changes: `DBT_PROJECT_DIR` / `WORKSPACE_ROOT` /
-`PROJECT_ROOT`, in that precedence order (see `backend/app/core/config.py`).
+## Run it
 
-**Shipping this to a client?** They don't need this repo. They get
-[deploy/client/](deploy/client/) — two pre-built images (published by
-[.github/workflows/publish-images.yml](.github/workflows/publish-images.yml)),
-one compose file, one `.env` with a single line (where their dbt project is).
-Warehouse credentials come from that project's own `.env`; the session secret
-and initial account passwords are generated on first start. Full details, plus
-Kubernetes/bare-VM/bake variants: [docs/ONBOARDING.md](docs/ONBOARDING.md).
-
-## Structure
-
-```
-backend/    FastAPI app (Python) — auth, dbt command building/execution, WebSocket log streaming
-frontend/   React + TypeScript + Vite — UI, ported 1:1 in visual language from the old Streamlit theme
-```
-
-## Running (containers only — Podman or Docker)
-
-The app is meant to run the way it will in production: two containers, no
-host Python or Node required. Kubernetes, a bare VM, and baking the dbt
-project into the image are also supported — see
-[docs/ONBOARDING.md](docs/ONBOARDING.md) for those paths.
-
-```
-browser -> nginx :8080 (serves the SPA, proxies /api incl. WebSocket)
-                 └──> backend :8000 (FastAPI + dbt, internal network only)
-                          └── /workspace: bind-mounted, git-cloned, or baked
-                              client dbt project (docs/ONBOARDING.md §3)
-```
+**For a client or a shared server** (microservices, PostgreSQL, Redis):
 
 ```bash
-cp .env.example .env     # set DBT_PROJECT_PATH (or _GIT_URL) -- that's the only required line
-podman compose up --build -d      # or: podman-compose up --build -d
-# open http://localhost:8080
+./deploy/client/setup.sh /path/to/dbt-project            # Windows: .\deploy\client\setup.ps1 -Project ...
 ```
 
-Before starting the stack (or any time something looks misconfigured), run
-the standalone check — validates the project, dbt profile/target/adapter and
-warehouse env vars, no server required:
+The script writes `.env` (generated secrets, the project path, image tags
+from [releases.yml](releases.yml)), starts [compose.yaml](compose.yaml) and
+prints the first-login passwords. Clients get the same thing without this
+repo, as the [client kit](deploy/client/README.md).
 
-```powershell
-cd backend
-.\run_fastapi.ps1 -Command preflight
+**On one laptop** (every backend service in one container, SQLite):
+[compose.single.yaml](compose.single.yaml), or the dbt package's `portal.py`.
+
+**On Kubernetes**: [deploy/kubernetes/](deploy/kubernetes/).
+
+**From source, across the repos**: check the three repos out next to this
+one, then `docker compose -f compose.yaml -f compose.build.yaml up --build -d`.
+
+Every path, every setting, upgrades and moving an existing single-node
+portal over: [docs/ONBOARDING.md](docs/ONBOARDING.md).
+
+## Releases
+
+Each component repo publishes its own versions (`vX.Y.Z` → images `X.Y.Z`,
+`X.Y`, `latest`). A **portal release** is a combination of the three that
+passed [the e2e smoke test](.github/workflows/e2e-smoke.yml) together, listed
+in [releases.yml](releases.yml):
+
+```yaml
+releases:
+  "2026.10.0":
+    backend: "1.0.0"
+    frontend: "1.0.0"
+    cube: "1.0.0"
 ```
 
-Notes:
-- **Podman needs a compose provider.** `podman compose` shells out to
-  `docker-compose` or `podman-compose`; `pip install --user podman-compose`
-  works (add its `Scripts` dir to `PATH`).
-- **`DBT_PROJECT_PATH` must be relative to `compose.yaml`** (e.g.
-  `../capgemini_dbt_core`). On Windows, Podman's client mangles absolute
-  `/mnt/c/...` paths into `/mnt/c/mnt/c/...`. No host folder to mount? Set
-  `DBT_PROJECT_GIT_URL` instead (docs/ONBOARDING.md §3) — the backend clones
-  it into a named volume on start.
-- The backend image carries its own dbt (`dbt-core` + `dbt-snowflake`), since a
-  host virtualenv can't be used across the Windows/Linux container boundary.
-  dbt writes `target/`, `logs/` and `dbt_packages/` into the mounted project.
-  A different warehouse adapter or a pinned dbt version: build with
-  `--build-arg EXTRA_PIP_PACKAGES="dbt-bigquery~=1.8.0"` (or set
-  `EXTRA_PIP_PACKAGES` in `.env` for compose).
-- **`up --build` does not recreate a running container** under podman-compose;
-  use `podman-compose down && podman-compose up -d` after code changes.
-- Snowflake credentials (`DBT_PKG_*`) come from `.env` and are read by the
-  client project's `profiles.yml`. Without them `dbt debug` fails with
-  `'user' is a required property`, which is the correct behavior.
+To cut one: tag the component repos, let their publish workflows finish (a
+release tag also triggers the e2e smoke test here), then add the entry to
+`releases.yml` through the usual PR flow. Merging it to `main` builds the
+client kit ([client-kit.yml](.github/workflows/client-kit.yml)) and attaches
+it to a `portal-<release>` GitHub release.
 
-The stack starts in **production mode** by default: each seeded account gets a
-random password, printed once in the backend log (`podman logs <backend>`).
-For a local demo with the documented accounts, set `ENVIRONMENT=development`
-in `.env`: `admin` / `admin123!`, `engineer` / `engineer123!`,
-`analyst` / `analyst123!`, `auditor` / `auditor123!`. Production refuses to
-start if any `SEED_*_PASSWORD` is set to one of these.
+## Repository secrets
 
-## Status
-
-Every page of the old Streamlit portal is ported: Home, Onboarding, dbt
-Runner, SQL Linter, Profiler, dbt Docs, Elementary, Colibri, Assets, DWH
-FinOps, Airflow, Ask AI, and Governance.
-
-Platform features:
-
-- **Sessions** use httpOnly, SameSite=Strict cookies: a 15-minute access token
-  renewed silently from a rotating 7-day refresh token. Logout, disabling an
-  account or resetting its password revokes its sessions. Scripts can still
-  call the API with `Authorization: Bearer`.
-- **Scheduler**: cron schedules for any dbt Runner command (the *Schedules*
-  button on the Runner page). Each slot fires exactly once, however many
-  backend replicas run.
-- **Failure alerts** to Slack, Microsoft Teams and email, for manual and
-  scheduled runs (Governance → Failure alerts).
-- **Durable state**: running jobs, run history and the sign-in lockout live in
-  the portal database, so a restart loses nothing. A job whose backend died
-  is marked failed within about 2.5 minutes.
-- **Observability**: JSON logs with a request id on every line, and
-  Prometheus metrics at `/metrics` on the backend's internal port.
-- **Airflow**: with `AIRFLOW_URL` and a service account set, list DAGs, see
-  recent runs, pause/unpause and trigger them from the portal.
-- **Airbyte**: connect a self-hosted (`abctl`) or Cloud Airbyte to list
-  connections with their last sync, run and cancel syncs, and browse sync
-  history (docs/ONBOARDING.md, section 5a).
-- **Tools & Services**: one page with every integrated tool's live status,
-  version, config variables and next step when it isn't working.
-- **dbt Development** (first page under Build & Quality): a VS Code-style
-  editor (Monaco, bundled, no CDN) on the project's files: explorer, tabs,
-  search in files, dbt-aware Jinja SQL with `ref()`/`source()`/macro
-  completion, hover and go-to-definition, layered new-file templates
-  (staging/intermediate/marts, sources, snapshots, tests), a model inspector
-  (lineage, columns, tests, compiled SQL side by side) and Preview / Compile /
-  Run / Build / Test / Lint on the open model with live output. Saves are
-  optimistic (a file someone else changed is never silently overwritten),
-  deletes go to a restorable trash on the data volume, git changes can be
-  diffed and discarded, and every write is in the audit trail. Editing needs
-  the new `dbt.develop` permission (granted once to Admin and Data Engineer);
-  `dbt.execute` alone can browse. Secrets (`.env`, `*.env`, `profiles.yml`,
-  keys, `.git`) are never listed; `target/`, `dbt_packages/` and `logs/` are
-  read-only.
-- **UI**: light and dark theme, line icons, a crash screen per page instead of
-  a blank app, and keyboard focus rings with a skip-to-content link.
-
-Known limits:
-
-- More than one backend replica needs PostgreSQL (`DATABASE_URL`). Live log
-  streaming and *Cancel* work on the replica running the job; other replicas
-  show the stored tail once it finishes.
-- Run history persists to the portal database, not to Snowflake
-  `PORTAL_DBT_EXECUTIONS` like the old portal.
-- Email sign-in codes are still held in process memory, so with several
-  replicas the code must be redeemed on the replica that sent it.
-- dbt Development edits the shared working copy: there is no per-user
-  branch, and commit/push stay in your git workflow. In git mode
-  (`DBT_PROJECT_GIT_URL`) uncommitted edits are reset when the backend
-  restarts; the page warns about it.
-- Images are built as OCI format by default, which drops image-level
-  `HEALTHCHECK`; healthchecks therefore live in `compose.yaml` instead.
+| Secret | Repo | Used for |
+|---|---|---|
+| `DEPLOY_REPO_TOKEN` | backend, frontend, cube | telling this repo a component was released (fine-grained token: Contents read/write here) |
+| `GHCR_READ_TOKEN` | this repo | pulling the private images in the e2e test (a token with `read:packages`), unless the packages grant this repo read access |
+| `TEAMS_WEBHOOK_URL` | backend, frontend, cube | pipeline notifications (optional) |
 
 ## Branches and CI
 
-Changes are promoted through three branches, only by pull request:
-
-```mermaid
-flowchart LR
-  F["feature/* · feat/* · fix/*<br/>bugfix/* · hotfix/* · chore/*"] -->|PR| D["dev"] -->|PR| T["test"] -->|PR| M["main"]
-  D -->|push| PD["publish dev images"]
-  T -->|push| PT["publish test images"]
-  M -->|push| PM["publish prod images"]
-```
-
-| Workflow | Runs on | Checks |
-| :-- | :-- | :-- |
-| [pre-check.yml](.github/workflows/pre-check.yml) | PRs into `dev`, `test`, `main`; workflow-only changes are ignored | gitleaks and repository scans; promotion path; backend, frontend, and cube validation/image scans run only for changed components |
-| [publish-images-dev.yml](.github/workflows/publish-images-dev.yml) | Pushes to `dev`, or manual dispatch | Publishes selected components to the `dev` image tag; manual runs are fixed to the `dev` environment and branch |
-| [publish-images-test.yml](.github/workflows/publish-images-test.yml) | Pushes to `test`, or manual dispatch | Publishes selected components to the `test` image tag; manual runs are fixed to the `test` environment and branch |
-| [publish-images-prod.yml](.github/workflows/publish-images-prod.yml) | Pushes to `main`, or manual dispatch | Publishes selected components to the `prod` image tag; manual runs are fixed to the `prod` environment and `main` branch |
-| [publish-images.yml](.github/workflows/publish-images.yml) | Called by the three environment workflows | Shared build, Trivy scan, GHCR publish, and Teams status notification logic |
-| [e2e-smoke.yml](.github/workflows/e2e-smoke.yml) | Manual dispatch | Builds the compose stack and runs the Playwright smoke test |
-
-Before opening a PR, run the same checks locally:
-
-```bash
-python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt -c backend/constraints.txt
-python -m ruff check . && python -m ruff format --check .
-cd backend && python -m pytest && cd ..
-cd frontend && npm ci && npm run lint && npm test && npm run build
-```
-
-`frontend/package-lock.json` is committed so CI and image builds install the same versions;
-commit it whenever `package.json` changes.
+Every repo uses the same flow: working branch → `dev` → `test` → `main`
+(pull requests, checked by `pre-check.yml`). Pushes to `dev`, `test` and
+`main` publish `<env>-<sha>` images; a `vX.Y.Z` tag on `main` publishes a
+release.

@@ -1,0 +1,18 @@
+# The client dbt project, shared by the services that use it:
+#   execution API  read-write: clones it in git mode, the dbt editor saves files
+#   worker(s)      read-write: dbt runs here and writes target/, logs/, dbt_packages/
+#   insights       read-only:  reads what the runs produced
+#   semantic       read-only:  reads the manifest and profile
+# Pods on several nodes need ReadWriteMany (Azure Files, EFS, Filestore, NFS):
+# set storageClassName to such a class. On a single-node cluster
+# ReadWriteOnce works too.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dbt-portal-workspace
+spec:
+  accessModes: [ReadWriteMany]
+  # storageClassName: azurefile-csi
+  resources:
+    requests:
+      storage: 5Gi

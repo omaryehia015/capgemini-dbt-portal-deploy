@@ -1,42 +1,46 @@
-# Runs the dbt Portal for one dbt project on Windows, from the pre-built images.
-# Needs only Docker Desktop or Podman Desktop: no compose, no build, no Python/Node/dbt.
+# Runs the dbt Portal (microservices stack) for one dbt project on Windows,
+# from the pre-built images. Needs Docker Desktop, or Podman Desktop with a
+# compose provider; no build, no Python/Node/dbt on this machine.
 #
 #   .\setup.ps1 -Project C:\work\my-dbt-project
-#   .\setup.ps1 -Project C:\work\my-dbt-project -Port 8081 -Tag 1.2.0
-#   .\setup.ps1 -Project C:\work\my-dbt-project -SkipPull   # images already here (docker load)
+#   .\setup.ps1 -Project C:\work\my-dbt-project -Port 8081 -Release 2026.10.0
+#   .\setup.ps1 -Project C:\work\my-dbt-project -SkipPull     # images already here (docker load)
+#   .\setup.ps1 -Project C:\work\my-dbt-project -Workers 3    # run more dbt jobs at once
 #
-# Run it again to upgrade or change the port: accounts and history are kept.
-# Optional portal settings (LDAP, SMTP, AI keys...) go in a .env next to this
-# script, see .env.example. Warehouse credentials stay in the project's own .env.
+# The first run writes .env next to compose.yaml with generated secrets; later
+# runs keep it (accounts, history and sessions survive upgrades). Optional
+# portal settings (LDAP, SMTP, AI keys...) go in that .env too.
+# Warehouse credentials stay in the project's own .env.
 # If Windows blocks the script: powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Project ...
 [CmdletBinding()]
 param(
     [string]$Project,
-    [int]$Port = 8080,
-    [string]$Tag = "latest",
-    [string]$Registry = "ghcr.io/omaryehia015/capgemini-dbt-portal",
+    [int]$Port = 0,
+    [string]$Release,
+    [int]$Workers = 1,
     [switch]$SkipPull
 )
 $ErrorActionPreference = "Stop"
-Set-Location $PSScriptRoot
+# Works from the repo (deploy\client\) and from the unpacked client kit (flat).
+$Root = if (Test-Path (Join-Path $PSScriptRoot "compose.yaml")) { $PSScriptRoot } else { (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path }
+Set-Location $Root
 
 function Say($text) { Write-Host "`n==> $text" -ForegroundColor Cyan }
 function Fail($text) { Write-Host "ERROR: $text" -ForegroundColor Red; exit 1 }
 # Native commands: run quietly, report success. (Windows PowerShell turns their
 # stderr into errors, so it is silenced here and checked through the exit code.)
-function Try-Run { $ErrorActionPreference = "Continue"; & $E @args *> $null; return ($LASTEXITCODE -eq 0) }
+function Try-Run($exe) { $ErrorActionPreference = "Continue"; & $exe @args *> $null; return ($LASTEXITCODE -eq 0) }
+function Compose { $ErrorActionPreference = "Continue"; & $E compose @args; if ($LASTEXITCODE -ne 0) { Fail "$E compose $($args -join ' ') failed." } }
 
-# -- 1. Docker or Podman -------------------------------------------------------
+# -- 1. Docker or Podman, with compose -----------------------------------------
 $E = $null
 foreach ($candidate in "docker", "podman") {
-    if (Get-Command $candidate -ErrorAction SilentlyContinue) {
-        $E = $candidate
-        if (Try-Run info) { break }
-        $E = $null
+    if ((Get-Command $candidate -ErrorAction SilentlyContinue) -and (Try-Run $candidate info) -and (Try-Run $candidate compose version)) {
+        $E = $candidate; break
     }
 }
-if (-not $E) { Fail "Start Docker Desktop (or Podman Desktop) first." }
-Say "Using $E"
+if (-not $E) { Fail "Start Docker Desktop (or Podman Desktop with a compose provider: pip install podman-compose) first." }
+Say "Using $E compose"
 
 # -- 2. The dbt project --------------------------------------------------------
 if (-not $Project) { $Project = Read-Host "Path to your dbt project (the folder with dbt_project.yml)" }
@@ -47,100 +51,111 @@ if (-not (Test-Path (Join-Path $Project ".env"))) {
     Write-Host "WARNING: $Project\.env is missing. The portal reads the warehouse credentials from it." -ForegroundColor Yellow
 }
 
+# -- 3. .env: secrets once, project / port / versions every run ----------------
+function New-Secret { $b = New-Object byte[] 30; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); ([Convert]::ToBase64String($b) -replace '[/+=]', '') }
+function Get-Env($key) {
+    if (-not (Test-Path .env)) { return "" }
+    $line = Get-Content .env | Where-Object { $_ -match "^$key=" } | Select-Object -First 1
+    if ($line) { return $line.Substring($key.Length + 1) } else { return "" }
+}
+function Set-Env($key, $value) {
+    $lines = @(); if (Test-Path .env) { $lines = @(Get-Content .env) }
+    $found = $false
+    $lines = $lines | ForEach-Object { if ($_ -match "^$key=") { $found = $true; "$key=$value" } else { $_ } }
+    if (-not $found) { $lines += "$key=$value" }
+    # UTF-8 without BOM: compose reads the first key with a BOM as a different name.
+    [IO.File]::WriteAllLines((Join-Path $Root ".env"), [string[]]$lines, (New-Object Text.UTF8Encoding $false))
+}
+
+if (-not (Test-Path .env)) { Say "Writing .env with generated secrets"; Copy-Item .env.example .env }
+foreach ($key in "JWT_SECRET", "CUBE_API_SECRET", "POSTGRES_PASSWORD", "REDIS_PASSWORD") {
+    if (-not (Get-Env $key)) { Set-Env $key (New-Secret) }
+}
+
+# Podman's Windows client mangles absolute paths (/mnt/c/mnt/c/...): give it
+# the project relative to compose.yaml. Docker Desktop takes the Windows path.
+$projectPath = $Project
+if ($E -eq "podman") {
+    $from = New-Object Uri ($Root.TrimEnd('\') + '\')
+    $rel = [Uri]::UnescapeDataString($from.MakeRelativeUri((New-Object Uri $Project)).ToString())
+    if (-not $rel.StartsWith("file:")) { $projectPath = $rel.TrimEnd('/') }
+}
+Set-Env DBT_PROJECT_PATH ($projectPath -replace '\\', '/')
+if ($Port -gt 0) { Set-Env PORTAL_PORT $Port }
+$Port = if (Get-Env PORTAL_PORT) { [int](Get-Env PORTAL_PORT) } else { 8080 }
+# Bind mounts on Windows show every file as root-owned: run as root so `dbt deps` can write.
+Set-Env PORTAL_USER "0:0"
+
+if ($Release) {
+    $text = Get-Content releases.yml -Raw
+    if ($Release -eq "latest") { $Release = ([regex]::Match($text, '(?m)^latest:\s*"?([^"\r\n]+)"?')).Groups[1].Value }
+    $block = [regex]::Match($text, '(?ms)^  "' + [regex]::Escape($Release) + '":\s*\r?\n(.*?)(?=^  "|\z)')
+    if (-not $block.Success) { Fail "Release '$Release' is not in releases.yml." }
+    foreach ($part in "backend", "frontend", "cube") {
+        $tag = ([regex]::Match($block.Groups[1].Value, '(?m)^\s*' + $part + ':\s*"?([^"\r\n]+)"?')).Groups[1].Value
+        Set-Env "$($part.ToUpper())_TAG" $tag
+    }
+    Say "Release ${Release}: backend $(Get-Env BACKEND_TAG), frontend $(Get-Env FRONTEND_TAG), cube $(Get-Env CUBE_TAG)"
+}
+
 # Where profiles.yml is: in the project (seen as /workspace), or ~\.dbt.
-$extra = @()
+Remove-Item compose.override.yaml -ErrorAction SilentlyContinue
 $userDbt = Join-Path $env:USERPROFILE ".dbt"
 if (Test-Path (Join-Path $Project "profiles.yml")) { }
-elseif (Test-Path (Join-Path $Project "profiles\profiles.yml")) { $extra += "-e", "DBT_PROFILES_DIR=/workspace/profiles" }
-elseif (Test-Path (Join-Path $userDbt "profiles.yml")) { $extra += "-v", "${userDbt}:/profiles:ro", "-e", "DBT_PROFILES_DIR=/profiles" }
+elseif (Test-Path (Join-Path $Project "profiles\profiles.yml")) { Set-Env DBT_PROFILES_DIR "/workspace/profiles" }
+elseif (Test-Path (Join-Path $userDbt "profiles.yml")) {
+    Set-Env DBT_PROFILES_DIR "/profiles"
+    $mount = ($userDbt -replace '\\', '/') + ":/profiles:ro"
+    $override = @("# Written by setup.ps1: profiles.yml comes from ~\.dbt on this machine.", "services:")
+    foreach ($svc in "execution", "worker", "insights", "semantic") { $override += "  ${svc}:", "    volumes: [""$mount""]" }
+    [IO.File]::WriteAllLines((Join-Path $Root "compose.override.yaml"), [string[]]$override, (New-Object Text.UTF8Encoding $false))
+}
 else { Write-Host "WARNING: no profiles.yml found in the project or $userDbt." -ForegroundColor Yellow }
-if (Test-Path .env) { $extra += "--env-file", ".env" }
 
-# One set of names per project, so several projects can run side by side.
-$slug = ((Split-Path $Project -Leaf).ToLower() -replace '[^a-z0-9]', '-')
-$Name = "dbt-portal-$slug"
-Say "Project $Project -> containers $Name-*"
-
-# -- 3. Pull the images (sign in if they are private) --------------------------
-$Backend = "${Registry}-backend:$Tag"
-$Frontend = "${Registry}-frontend:$Tag"
-if ($SkipPull) {
-    if (-not ((Try-Run image inspect $Backend) -and (Try-Run image inspect $Frontend))) { Fail "$Backend / $Frontend are not on this machine." }
-    Say "Using the images already on this machine"
-    $pulled = $true
+# -- 4. Pull and start ---------------------------------------------------------
+if (-not $SkipPull) {
+    Say "Pulling images"
+    $ErrorActionPreference = "Continue"
+    & $E compose pull --quiet *> $null
+    if ($LASTEXITCODE -ne 0) {
+        $registry = if (Get-Env IMAGE_REGISTRY) { Get-Env IMAGE_REGISTRY } else { "ghcr.io/omaryehia015" }
+        Write-Host "The images need a sign-in. Use the registry username and read-only token you were given."
+        $user = Read-Host "Registry username"
+        $token = Read-Host "Token" -AsSecureString
+        $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($token))
+        $plain | & $E login ($registry -split '/')[0] -u $user --password-stdin
+        Compose pull --quiet
+    }
+    $ErrorActionPreference = "Stop"
 }
-else {
-    Say "Pulling $Backend and $Frontend"
-    $pulled = (Try-Run pull $Backend) -and (Try-Run pull $Frontend)
-}
-if (-not $pulled) {
-    Write-Host "The images need a sign-in. Use the registry username and read-only token you were given."
-    $user = Read-Host "Registry username"
-    $secure = Read-Host "Token (hidden)" -AsSecureString
-    $token = [System.Net.NetworkCredential]::new("", $secure).Password
-    $token | & $E login ($Registry.Split("/")[0]) -u $user --password-stdin
-    if ($LASTEXITCODE -ne 0) { Fail "Sign-in refused." }
-    & $E pull $Backend; if ($LASTEXITCODE -ne 0) { Fail "Could not pull $Backend." }
-    & $E pull $Frontend; if ($LASTEXITCODE -ne 0) { Fail "Could not pull $Frontend." }
-}
-# The semantic engine (Semantic Modeling page) is optional: without its image the
-# portal still runs, and that page says the engine is offline.
-$Cube = "${Registry}-cube:$Tag"
-$withCube = if ($SkipPull) { Try-Run image inspect $Cube } else { Try-Run pull $Cube }
-if (-not $withCube) { Write-Host "WARNING: $Cube is not available; starting without the semantic engine." -ForegroundColor Yellow }
-
-# -- 4. Start (replaces old containers; the data volume is kept) ---------------
-Say "Starting"
-Try-Run rm -f "$Name-frontend" "$Name-cube" "$Name-backend" | Out-Null
-Try-Run network create $Name | Out-Null
-Try-Run volume create "$Name-data" | Out-Null
-# Shared by the backend and the semantic engine: API secret, warehouse login, model.
-Try-Run volume create "$Name-cube" | Out-Null
-# Root inside the container: Windows bind mounts need it for `dbt deps`.
-$ok = Try-Run run -d --name "$Name-backend" --network $Name --network-alias backend --restart unless-stopped `
-    --user 0:0 -e DBT_PROJECT_DIR=/workspace -e ENVIRONMENT=production `
-    -e CUBE_SHARED_DIR=/cube-shared -e CUBE_API_URL=http://cube:4000 `
-    -v "${Project}:/workspace" -v "${Name}-data:/data" -v "${Name}-cube:/cube-shared" @extra $Backend
-if (-not $ok) { Fail "Could not start the backend. Try: $E run --rm $Backend" }
-if ($withCube) {
-    $ok = Try-Run run -d --name "$Name-cube" --network $Name --network-alias cube --restart unless-stopped `
-        -v "${Name}-cube:/cube/conf/portal" $Cube
-    if (-not $ok) { Write-Host "WARNING: could not start the semantic engine. See: $E logs $Name-cube" -ForegroundColor Yellow }
-}
-$ok = Try-Run run -d --name "$Name-frontend" --network $Name --restart unless-stopped `
-    -p "${Port}:8080" -e BACKEND_UPSTREAM=backend:8000 $Frontend
-if (-not $ok) { Fail "Could not start the frontend (port $Port taken?). Try: .\setup.ps1 -Project '$Project' -Port 8081" }
+Say "Starting (this takes a minute on first start: databases, migrations)"
+Compose up -d --remove-orphans --scale "worker=$Workers"
 
 Write-Host -NoNewline "Waiting for the portal"
 $ready = $false
-foreach ($attempt in 1..60) {
-    try {
-        Invoke-WebRequest "http://localhost:$Port/api/health" -UseBasicParsing -TimeoutSec 5 | Out-Null
-        $ready = $true; break
-    } catch { Write-Host -NoNewline "."; Start-Sleep -Seconds 5 }
+for ($i = 0; $i -lt 60; $i++) {
+    try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "http://localhost:$Port/api/health" | Out-Null; $ready = $true; break }
+    catch { Write-Host -NoNewline "."; Start-Sleep -Seconds 5 }
 }
 Write-Host ""
-if (-not $ready) { Fail "Not up after 5 minutes. See: $E logs $Name-backend" }
+if (-not $ready) { Fail "Not up after 5 minutes. See: $E compose ps; $E compose logs identity execution" }
 
 # -- 5. First sign-in ----------------------------------------------------------
 Say "Portal is up: http://localhost:$Port"
 $ErrorActionPreference = "Continue"
-[string[]]$logs = & $E logs "$Name-backend" 2>&1 | ForEach-Object { "$_" }
-$at = [array]::FindIndex($logs, [Predicate[string]] { param($l) $l -match "GENERATED INITIAL CREDENTIALS" })
-if ($at -ge 0) { $logs[$at..([Math]::Min($at + 5, $logs.Count - 1))] | ForEach-Object { Write-Host $_ -ForegroundColor Green } }
-else { Write-Host "No new passwords printed: the accounts already exist from an earlier run." }
-
-Write-Host @"
+$creds = (& $E compose logs identity 2>&1 | Out-String) -split "`n" | Select-String -Pattern "GENERATED INITIAL CREDENTIALS" -Context 0, 5
+if ($creds) { $creds | ForEach-Object { $_.Line; $_.Context.PostContext } } else { "No new passwords printed: the accounts already exist from an earlier run." }
+@"
 
 Next:
   1. Open http://localhost:$Port and sign in as 'admin' (password printed on the first run).
   2. Change it under My account.
   3. Open Onboarding and run the steps (install packages, provision, build, reports).
 
-Manage:
-  $E logs -f $Name-backend   # what the backend is doing
-  $E stop $Name-frontend $Name-cube $Name-backend   # stop
-  $E start $Name-backend $Name-cube $Name-frontend   # start again
-  $E rm -f $Name-frontend $Name-cube $Name-backend; $E volume rm $Name-data $Name-cube   # uninstall (deletes accounts)
+Manage (from $Root):
+  $E compose ps                          # what is running
+  $E compose logs -f execution worker    # dbt runs
+  $E compose up -d --scale worker=3      # more dbt jobs at once
+  $E compose stop / $E compose start     # stop, start again
+  $E compose down -v                     # uninstall (deletes accounts and history)
 "@
-Start-Process "http://localhost:$Port"

@@ -1,8 +1,13 @@
-# Per-client install:
+# Per-client install of the microservices stack:
 #   1. cp secrets.env.example secrets.env   (git-ignored) and fill it in
-#   2. edit portal.env (non-secret settings) and the images below
-#   3. kubectl apply -k deploy/kubernetes   (add -n <namespace> as needed)
-#   4. kubectl logs deploy/dbt-portal-backend   -> preflight output + seed passwords
+#   2. edit portal.env (non-secret settings) and the image tags below
+#      (releases.yml lists the versions released together)
+#   3. kubectl apply -k deploy/kubernetes
+#   4. kubectl -n dbt-portal logs deploy/dbt-portal-identity   -> first-login passwords
+#
+# PostgreSQL and Redis are included as single-pod defaults (data-stores.yaml).
+# In production use the platform's managed ones: delete data-stores.yaml from
+# `resources`, then point DATABASE_URL_* and REDIS_URL in secrets.env at them.
 #
 # Full walkthrough: docs/ONBOARDING.md
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -12,7 +17,13 @@ namespace: dbt-portal
 
 resources:
   - namespace.yaml
-  - backend.yaml
+  - data-stores.yaml
+  - workspace.yaml
+  - identity.yaml
+  - execution.yaml
+  - insights.yaml
+  - semantic.yaml
+  - cube.yaml
   - frontend.yaml
   - ingress.yaml
 
@@ -26,11 +37,23 @@ secretGenerator:
     envs:
       - secrets.env
 
-# Images pushed to the client's registry (see docs/ONBOARDING.md, step 3).
+# Images in the client's registry (see docs/ONBOARDING.md, step 3).
 images:
   - name: capgemini-dbt-portal-backend
-    newName: REGISTRY/capgemini-dbt-portal-backend
+    newName: ghcr.io/omaryehia015/capgemini-dbt-portal-backend
+    newTag: "1.0.0"
+  - name: capgemini-dbt-portal-identity
+    newName: ghcr.io/omaryehia015/capgemini-dbt-portal-identity
+    newTag: "1.0.0"
+  - name: capgemini-dbt-portal-insights
+    newName: ghcr.io/omaryehia015/capgemini-dbt-portal-insights
+    newTag: "1.0.0"
+  - name: capgemini-dbt-portal-semantic
+    newName: ghcr.io/omaryehia015/capgemini-dbt-portal-semantic
+    newTag: "1.0.0"
+  - name: capgemini-dbt-portal-cube
+    newName: ghcr.io/omaryehia015/capgemini-dbt-portal-cube
     newTag: "1.0.0"
   - name: capgemini-dbt-portal-frontend
-    newName: REGISTRY/capgemini-dbt-portal-frontend
+    newName: ghcr.io/omaryehia015/capgemini-dbt-portal-frontend
     newTag: "1.0.0"

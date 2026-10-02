@@ -1,0 +1,28 @@
+# Portal releases: which versions of the three repos were tested together.
+#
+#   backend   capgemini-dbt-portal-backend: the images backend (all-in-one,
+#             execution and worker), identity, insights, semantic
+#   frontend  capgemini-dbt-portal-frontend
+#   cube      capgemini-dbt-portal-cube
+#
+# A deployment pins one release: deploy/client/setup.sh --release <name>
+# writes its tags into .env (BACKEND_TAG, FRONTEND_TAG, CUBE_TAG), and
+# capgemini_dbt_core's scripts/portal.py --release does the same.
+#
+# Each repo releases on its own (vX.Y.Z tag -> images X.Y.Z, X.Y, latest).
+# A new entry here is added once the e2e smoke test passes on that
+# combination (.github/workflows/e2e-smoke.yml). Compatibility rules:
+#   - frontend and backend: the frontend checks GET /api/version's api_version
+#     major against its own and warns on a mismatch
+#   - backend and cube: the cube image's CUBE_CONTRACT must equal the
+#     semantic service's contract (GET /api/version, cube_contract)
+latest: "2026.10.0"
+releases:
+  "2026.10.0":
+    backend: "1.0.0"
+    frontend: "1.0.0"
+    cube: "1.0.0"
+    notes: >-
+      First release as separate services: identity, execution (+ workers),
+      insights and semantic; PostgreSQL and Redis; Cube configured over HTTP
+      instead of a shared volume.

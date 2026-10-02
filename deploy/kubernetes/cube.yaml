@@ -1,0 +1,42 @@
+# Cube, the semantic engine. Stateless: it reads its warehouse login and data
+# model from the semantic service, so it can be scaled and restarted freely.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbt-portal-cube
+  labels: { app: dbt-portal, component: cube }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dbt-portal, component: cube }
+  template:
+    metadata:
+      labels: { app: dbt-portal, component: cube }
+    spec:
+      containers:
+        - name: cube
+          image: capgemini-dbt-portal-cube
+          ports: [{ containerPort: 4000 }]
+          env:
+            - name: CUBEJS_API_SECRET
+              valueFrom: { secretKeyRef: { name: dbt-portal-secrets, key: CUBE_API_SECRET } }
+            - { name: PORTAL_SEMANTIC_URL, value: "http://dbt-portal-semantic:8000" }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 4000 }
+            periodSeconds: 15
+          livenessProbe:
+            httpGet: { path: /livez, port: 4000 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { memory: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dbt-portal-cube
+  labels: { app: dbt-portal, component: cube }
+spec:
+  selector: { app: dbt-portal, component: cube }
+  ports: [{ port: 4000, targetPort: 4000 }]

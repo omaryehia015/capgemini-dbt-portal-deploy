@@ -1,0 +1,59 @@
+# Single node: every backend service in one container, SQLite, no Redis.
+# For a laptop, a demo or a small team; it does not scale out. The
+# microservices stack (compose.yaml) is the default for anything shared.
+#
+#   docker compose -f compose.single.yaml up -d
+#
+# Same images as compose.yaml: the backend image runs every service when
+# PORTAL_SERVICES is left at "all".
+services:
+  backend:
+    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-backend:${BACKEND_TAG:-latest}
+    restart: unless-stopped
+    user: "${PORTAL_USER:-10001:10001}"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DBT_PROJECT_DIR: /workspace
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      # Unset: generated on first start and kept on the portal_data volume.
+      JWT_SECRET: ${JWT_SECRET:-}
+      CUBE_API_SECRET: "${CUBE_API_SECRET:?CUBE_API_SECRET is not set - see .env.example}"
+      CUBE_API_URL: http://cube:4000
+    volumes:
+      - ${DBT_PROJECT_PATH:-workspace}:/workspace
+      # SQLite database, the dbt editor's trash, the semantic layer's state.
+      - portal_data:/data
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+
+  cube:
+    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-cube:${CUBE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      CUBEJS_API_SECRET: ${CUBE_API_SECRET}
+      PORTAL_SEMANTIC_URL: http://backend:8000
+    expose: ["4000"]
+
+  frontend:
+    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-frontend:${FRONTEND_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      backend: { condition: service_healthy }
+    ports:
+      - "${PORTAL_PORT:-8080}:8080"
+    environment:
+      BACKEND_UPSTREAM: backend:8000
+      AIRFLOW_UPSTREAM: ${AIRFLOW_UPSTREAM:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  portal_data:
+  workspace:

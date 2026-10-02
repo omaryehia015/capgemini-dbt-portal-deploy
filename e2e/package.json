@@ -1,0 +1,11 @@
+{
+  "name": "capgemini-dbt-portal-e2e",
+  "private": true,
+  "description": "Browser smoke test of a whole portal stack: run against released images by .github/workflows/e2e-smoke.yml",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1"
+  }
+}

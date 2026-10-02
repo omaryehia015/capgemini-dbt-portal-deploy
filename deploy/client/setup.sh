@@ -1,28 +1,35 @@
 #!/usr/bin/env bash
-# Runs the dbt Portal for one dbt project, from the pre-built images.
-# Needs only Docker or Podman: no compose, no build, no Python/Node/dbt.
+# Runs the dbt Portal (microservices stack) for one dbt project, from the
+# pre-built images. Needs Docker or Podman with compose; no build, no
+# Python/Node/dbt on this machine.
 #
 #   ./setup.sh /path/to/my-dbt-project
-#   ./setup.sh /path/to/my-dbt-project --port 8081 --tag 1.2.0
-#   ./setup.sh /path/to/my-dbt-project --skip-pull   # images already here (docker load)
+#   ./setup.sh /path/to/my-dbt-project --port 8081 --release 2026.10.0
+#   ./setup.sh /path/to/my-dbt-project --skip-pull     # images already here (docker load)
+#   ./setup.sh /path/to/my-dbt-project --workers 3     # run more dbt jobs at once
 #
-# Run it again to upgrade or change the port: accounts and history are kept.
-# Optional portal settings (LDAP, SMTP, AI keys...) go in a .env next to this
-# script, see .env.example. Warehouse credentials stay in the project's own .env.
+# The first run writes .env next to compose.yaml with generated secrets; later
+# runs keep it (accounts, history and sessions survive upgrades). Optional
+# portal settings (LDAP, SMTP, AI keys...) go in that .env too.
+# Warehouse credentials stay in the project's own .env.
 set -euo pipefail
-cd "$(dirname "$0")"
+here="$(cd "$(dirname "$0")" && pwd)"
+# Works from the repo (deploy/client/) and from the unpacked client kit (flat).
+if [[ -f "$here/compose.yaml" ]]; then ROOT="$here"; else ROOT="$(cd "$here/../.." && pwd)"; fi
+cd "$ROOT"
 
-REGISTRY="${IMAGE_REGISTRY:-ghcr.io/omaryehia015/capgemini-dbt-portal}"
-TAG=latest
-PORT=8080
+PORT=""
 PROJECT=""
+RELEASE=""
 SKIP_PULL=""
+WORKERS=1
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --port) PORT="$2"; shift 2 ;;
-        --tag) TAG="$2"; shift 2 ;;
+        --release) RELEASE="$2"; shift 2 ;;
+        --workers) WORKERS="$2"; shift 2 ;;
         --skip-pull) SKIP_PULL=1; shift ;;
-        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
         *) PROJECT="$1"; shift ;;
     esac
 done
@@ -30,11 +37,11 @@ done
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
-# -- 1. Docker or Podman -----------------------------------------------------
-if docker info >/dev/null 2>&1; then E=docker
-elif podman info >/dev/null 2>&1; then E=podman
-else fail "Start Docker (or Podman) first."; fi
-say "Using $E"
+# -- 1. Docker or Podman, with compose -----------------------------------------
+if docker compose version >/dev/null 2>&1 && docker info >/dev/null 2>&1; then C=(docker compose); E=docker
+elif podman info >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then C=(podman compose); E=podman
+else fail "Start Docker (or Podman with a compose provider: pip install podman-compose) first."; fi
+say "Using ${C[*]}"
 
 # -- 2. The dbt project --------------------------------------------------------
 [[ -n "$PROJECT" ]] || read -rp "Path to your dbt project (the folder with dbt_project.yml): " PROJECT
@@ -43,61 +50,72 @@ PROJECT="${PROJECT/#\~/$HOME}"
 PROJECT="$(cd "$PROJECT" && pwd)"
 [[ -f "$PROJECT/.env" ]] || echo "WARNING: $PROJECT/.env is missing. The portal reads the warehouse credentials from it."
 
+# -- 3. .env: secrets once, project / port / versions every run ----------------
+secret() { head -c 36 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-40; }
+set_env() {  # set_env KEY VALUE: replace or append, keep everything else
+    local key="$1" value="$2"
+    if grep -q "^$key=" .env 2>/dev/null; then
+        sed -i.bak "s|^$key=.*|$key=$value|" .env && rm -f .env.bak
+    else
+        printf '%s=%s\n' "$key" "$value" >> .env
+    fi
+}
+get_env() { grep "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- || true; }
+
+if [[ ! -f .env ]]; then
+    say "Writing .env with generated secrets"
+    cp .env.example .env
+fi
+for key in JWT_SECRET CUBE_API_SECRET POSTGRES_PASSWORD REDIS_PASSWORD; do
+    [[ -n "$(get_env "$key")" ]] || set_env "$key" "$(secret)"
+done
+set_env DBT_PROJECT_PATH "$PROJECT"
+[[ -n "$PORT" ]] && set_env PORTAL_PORT "$PORT"
+PORT="$(get_env PORTAL_PORT)"; PORT="${PORT:-8080}"
+
+if [[ -n "$RELEASE" ]]; then
+    [[ "$RELEASE" == latest ]] && RELEASE="$(sed -n 's/^latest: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' releases.yml)"
+    block="$(awk -v r="  \"$RELEASE\":" '$0==r{f=1;next} f&&/^  "/{f=0} f' releases.yml)"
+    [[ -n "$block" ]] || fail "Release '$RELEASE' is not in releases.yml."
+    for part in backend frontend cube; do
+        tag="$(printf '%s\n' "$block" | sed -n "s/^ *$part: *\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p")"
+        set_env "$(echo "$part" | tr '[:lower:]' '[:upper:]')_TAG" "$tag"
+    done
+    say "Release $RELEASE: backend $(get_env BACKEND_TAG), frontend $(get_env FRONTEND_TAG), cube $(get_env CUBE_TAG)"
+fi
+
 # Where profiles.yml is: in the project (seen as /workspace), or ~/.dbt.
-extra=()
+rm -f compose.override.yaml
 if [[ -f "$PROJECT/profiles.yml" ]]; then :
-elif [[ -f "$PROJECT/profiles/profiles.yml" ]]; then extra+=(-e DBT_PROFILES_DIR=/workspace/profiles)
-elif [[ -f "$HOME/.dbt/profiles.yml" ]]; then extra+=(-v "$HOME/.dbt:/profiles:ro" -e DBT_PROFILES_DIR=/profiles)
+elif [[ -f "$PROJECT/profiles/profiles.yml" ]]; then set_env DBT_PROFILES_DIR /workspace/profiles
+elif [[ -f "$HOME/.dbt/profiles.yml" ]]; then
+    set_env DBT_PROFILES_DIR /profiles
+    {
+        echo "# Written by setup.sh: profiles.yml comes from ~/.dbt on this machine."
+        echo "services:"
+        for svc in execution worker insights semantic; do
+            echo "  $svc:"
+            echo "    volumes: [\"$HOME/.dbt:/profiles:ro\"]"
+        done
+    } > compose.override.yaml
 else echo "WARNING: no profiles.yml found in the project or ~/.dbt."; fi
-[[ -f .env ]] && extra+=(--env-file .env)
-# SELinux (Fedora/RHEL) would otherwise block the project mount.
-[[ "$E" == podman && "$(uname -s)" == Linux ]] && extra+=(--security-opt label=disable)
+# Bind mounts on macOS / rootless Podman: root inside the container, so `dbt deps` can write.
+[[ "$(uname -s)" == Darwin || "$E" == podman ]] && set_env PORTAL_USER 0:0
 
-# One set of names per project, so several projects can run side by side.
-slug="$(basename "$PROJECT" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')"
-NAME="dbt-portal-$slug"
-say "Project $PROJECT -> containers $NAME-*"
-
-# -- 3. Pull the images (sign in if they are private) --------------------------
-BACKEND="$REGISTRY-backend:$TAG"
-FRONTEND="$REGISTRY-frontend:$TAG"
-if [[ -n "$SKIP_PULL" ]]; then
-    "$E" image inspect "$BACKEND" >/dev/null 2>&1 && "$E" image inspect "$FRONTEND" >/dev/null 2>&1         || fail "$BACKEND / $FRONTEND are not on this machine."
-    say "Using the images already on this machine"
-elif ! { say "Pulling $BACKEND and $FRONTEND"; "$E" pull "$BACKEND" && "$E" pull "$FRONTEND"; }; then
-    echo "The images need a sign-in. Use the registry username and read-only token you were given."
-    read -rp "Registry username: " user
-    read -rsp "Token (hidden): " token && echo
-    printf '%s' "$token" | "$E" login "${REGISTRY%%/*}" -u "$user" --password-stdin
-    "$E" pull "$BACKEND" && "$E" pull "$FRONTEND"
+# -- 4. Pull and start ---------------------------------------------------------
+if [[ -z "$SKIP_PULL" ]]; then
+    say "Pulling images"
+    if ! "${C[@]}" pull --quiet 2>/dev/null; then
+        registry="$(get_env IMAGE_REGISTRY)"; registry="${registry:-ghcr.io/omaryehia015}"
+        echo "The images need a sign-in. Use the registry username and read-only token you were given."
+        read -rp "Registry username: " user
+        read -rsp "Token (hidden): " token && echo
+        printf '%s' "$token" | "$E" login "${registry%%/*}" -u "$user" --password-stdin
+        "${C[@]}" pull --quiet
+    fi
 fi
-# The semantic engine (Semantic Modeling page) is optional: without its image the
-# portal still runs, and that page says the engine is offline.
-CUBE="$REGISTRY-cube:$TAG"
-if [[ -n "$SKIP_PULL" ]]; then "$E" image inspect "$CUBE" >/dev/null 2>&1 && WITH_CUBE=1
-else "$E" pull "$CUBE" >/dev/null 2>&1 && WITH_CUBE=1; fi
-[[ -n "${WITH_CUBE:-}" ]] || echo "WARNING: $CUBE is not available; starting without the semantic engine."
-
-# -- 4. Start (replaces old containers; the data volume is kept) ---------------
-say "Starting"
-"$E" rm -f "$NAME-frontend" "$NAME-cube" "$NAME-backend" >/dev/null 2>&1 || true
-"$E" network create "$NAME" >/dev/null 2>&1 || true
-"$E" volume create "$NAME-data" >/dev/null 2>&1 || true
-# Shared by the backend and the semantic engine: API secret, warehouse login, model.
-"$E" volume create "$NAME-cube" >/dev/null 2>&1 || true
-# Root inside the container: bind mounts on Windows/macOS and rootless Podman need it for `dbt deps`.
-"$E" run -d --name "$NAME-backend" --network "$NAME" --network-alias backend --restart unless-stopped \
-    --user 0:0 -e DBT_PROJECT_DIR=/workspace -e ENVIRONMENT=production \
-    -e CUBE_SHARED_DIR=/cube-shared -e CUBE_API_URL=http://cube:4000 \
-    -v "$PROJECT:/workspace" -v "$NAME-data:/data" -v "$NAME-cube:/cube-shared" ${extra[@]+"${extra[@]}"} "$BACKEND" >/dev/null
-if [[ -n "${WITH_CUBE:-}" ]]; then
-    "$E" run -d --name "$NAME-cube" --network "$NAME" --network-alias cube --restart unless-stopped \
-        -v "$NAME-cube:/cube/conf/portal" "$CUBE" >/dev/null \
-        || echo "WARNING: could not start the semantic engine. See: $E logs $NAME-cube"
-fi
-"$E" run -d --name "$NAME-frontend" --network "$NAME" --restart unless-stopped \
-    -p "$PORT:8080" -e BACKEND_UPSTREAM=backend:8000 "$FRONTEND" >/dev/null \
-    || fail "Could not start the frontend (port $PORT taken?). Try: ./setup.sh '$PROJECT' --port 8081"
+say "Starting (this takes a minute on first start: databases, migrations)"
+"${C[@]}" up -d --remove-orphans --scale worker="$WORKERS"
 
 printf 'Waiting for the portal'
 for _ in $(seq 1 60); do
@@ -105,11 +123,11 @@ for _ in $(seq 1 60); do
     printf '.'; sleep 5
 done
 echo
-[[ "${ready:-}" == 1 ]] || fail "Not up after 5 minutes. See: $E logs $NAME-backend"
+[[ "${ready:-}" == 1 ]] || fail "Not up after 5 minutes. See: ${C[*]} ps; ${C[*]} logs identity execution"
 
 # -- 5. First sign-in ----------------------------------------------------------
 say "Portal is up: http://localhost:$PORT"
-"$E" logs "$NAME-backend" 2>&1 | grep -A5 "GENERATED INITIAL CREDENTIALS" \
+"${C[@]}" logs identity 2>&1 | grep -A5 "GENERATED INITIAL CREDENTIALS" \
     || echo "No new passwords printed: the accounts already exist from an earlier run."
 cat <<EOF
 
@@ -118,9 +136,10 @@ Next:
   2. Change it under My account.
   3. Open Onboarding and run the steps (install packages, provision, build, reports).
 
-Manage:
-  $E logs -f $NAME-backend   # what the backend is doing
-  $E stop $NAME-frontend $NAME-cube $NAME-backend   # stop
-  $E start $NAME-backend $NAME-cube $NAME-frontend   # start again
-  $E rm -f $NAME-frontend $NAME-cube $NAME-backend && $E volume rm $NAME-data $NAME-cube   # uninstall (deletes accounts)
+Manage (from $ROOT):
+  ${C[*]} ps                          # what is running
+  ${C[*]} logs -f execution worker    # dbt runs
+  ${C[*]} up -d --scale worker=3      # more dbt jobs at once
+  ${C[*]} stop / ${C[*]} start        # stop, start again
+  ${C[*]} down -v                     # uninstall (deletes accounts and history)
 EOF

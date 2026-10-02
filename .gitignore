@@ -1,14 +1,11 @@
-# Python
-__pycache__/
-.pytest_cache/
-*.pyc
-.venv/
 .env
+.env.bak
 
-# Node
+# Written by deploy/client/setup.* (profiles.yml mount for this machine)
+compose.override.yaml
+
+# e2e
 node_modules/
-dist/
-.vite/
 playwright-report/
 test-results/
 
@@ -19,8 +16,3 @@ test-results/
 
 # Deploy secrets
 deploy/kubernetes/secrets.env
-deploy/client/.env
-
-# Local runs outside the containers: portal DB and the semantic layer volume
-# (cube_manager falls back here; holds the generated Cube API secret).
-backend/data/

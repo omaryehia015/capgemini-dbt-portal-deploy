@@ -1,0 +1,72 @@
+# Package the client kit for a portal release: everything a client needs to
+# run the stack, nothing else (no source, no build). Runs when a release is
+# added to releases.yml on main, or on demand for any release in it.
+#
+#   dbt-portal-client-kit-<release>.zip
+#     compose.yaml  compose.single.yaml  .env.example  releases.yml
+#     postgres/init-databases.sql
+#     setup.sh  setup.ps1  README.md
+#
+# Attached to a GitHub release named portal-<release> in this repo.
+name: Client Kit
+
+on:
+  push:
+    branches: [main]
+    paths: [releases.yml]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Release from releases.yml (default: latest)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  kit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build the kit
+        id: kit
+        env:
+          WANTED: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          release=$(python3 -c "
+          import os, yaml
+          r = yaml.safe_load(open('releases.yml'))
+          name = os.environ.get('WANTED') or r['latest']
+          assert name in r['releases'], f'{name} is not in releases.yml'
+          print(name)")
+          kit="dbt-portal-client-kit-$release"
+          mkdir -p "$kit/postgres"
+          cp compose.yaml compose.single.yaml .env.example releases.yml "$kit/"
+          cp postgres/init-databases.sql "$kit/postgres/"
+          cp deploy/client/setup.sh deploy/client/setup.ps1 deploy/client/README.md "$kit/"
+          chmod +x "$kit/setup.sh"
+          # The kit's .env.example starts on this release's images.
+          read -r backend frontend cube < <(python3 -c "
+          import yaml; x = yaml.safe_load(open('releases.yml'))['releases']['$release']
+          print(x['backend'], x['frontend'], x['cube'])")
+          sed -i "s/^BACKEND_TAG=.*/BACKEND_TAG=$backend/; s/^FRONTEND_TAG=.*/FRONTEND_TAG=$frontend/; s/^CUBE_TAG=.*/CUBE_TAG=$cube/" "$kit/.env.example"
+          zip -qr "$kit.zip" "$kit"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "zip=$kit.zip" >> "$GITHUB_OUTPUT"
+      - name: Publish on a GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ steps.kit.outputs.release }}
+          ZIP: ${{ steps.kit.outputs.zip }}
+        run: |
+          tag="portal-$RELEASE"
+          notes=$(python3 -c "
+          import yaml; x = yaml.safe_load(open('releases.yml'))['releases']['$RELEASE']
+          print(f\"backend {x['backend']}, frontend {x['frontend']}, cube {x['cube']}\n\n{x.get('notes', '')}\")")
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$ZIP" --clobber
+          else
+            gh release create "$tag" "$ZIP" --title "Portal $RELEASE" --notes "$notes"
+          fi

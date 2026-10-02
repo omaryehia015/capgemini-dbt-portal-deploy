@@ -1,19 +1,4 @@
-# Who is asked to review what. Later lines win over earlier ones.
-# Replace the handles with the people or teams (@org/team) who own each part;
-# with "Require review from Code Owners" on in branch protection, their approval
-# becomes required for changes to their part.
-
+# Who is asked to review what. Replace the handle with the people or teams
+# (@org/team) who own this repo; with "Require review from Code Owners" on in
+# branch protection, their approval becomes required.
 *                     @omaryehia015
-
-# Backend: FastAPI, dbt runner, scheduler, auth
-/backend/             @omaryehia015
-/ruff.toml            @omaryehia015
-
-# Frontend: React app and nginx
-/frontend/            @omaryehia015
-
-# Deployment and CI: both sides depend on these
-/compose.yaml         @omaryehia015
-/deploy/              @omaryehia015
-/.github/             @omaryehia015
-/.trivyignore         @omaryehia015
