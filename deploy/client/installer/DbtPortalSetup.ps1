@@ -1,10 +1,3 @@
-<# : dbt Portal Setup. Double-click to run.
-@echo off
-setlocal
-set "PORTAL_INSTALLER=%~f0"
-start "" powershell -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -Command "& ([scriptblock]::Create([IO.File]::ReadAllText($env:PORTAL_INSTALLER)))"
-exit /b
-#>
 # ------------------------------------------------------------------------------
 # dbt Portal Setup: the window a client runs to install the portal.
 #

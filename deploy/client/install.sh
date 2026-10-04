@@ -12,7 +12,7 @@
 # Environment:
 #   PORTAL_RELEASE   release to install (default: latest)
 #   PORTAL_DIR       where to unpack the kit (default: ~/dbt-portal)
-#   PORTAL_TOKEN     the access token you were sent (downloads the kit, signs in to the images)
+#   PORTAL_TOKEN     the access token you were sent (signs in to the private images)
 #   GITHUB_TOKEN     same as PORTAL_TOKEN (older name)
 set -euo pipefail
 

@@ -4,11 +4,13 @@
 #   irm https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.ps1 | iex
 #
 # Environment (set before running):
-#   $env:PORTAL_TOKEN     the access token you were sent (downloads the kit, signs in to the images)
+#   $env:PORTAL_TOKEN     the access token you were sent (signs in to the private images)
 #   $env:PORTAL_PROJECT   a dbt project folder (not set: you connect a Git repository in the portal)
 #   $env:PORTAL_RELEASE   release to install (default: latest)
 #   $env:PORTAL_DIR       where to unpack the kit (default: ~\dbt-portal)
 #   $env:GITHUB_TOKEN     same as PORTAL_TOKEN (older name)
+#
+# The kit itself is public: the token is only needed for the images.
 $ErrorActionPreference = "Stop"
 $repo = "omaryehia015/capgemini-dbt-portal-deploy"
 $release = if ($env:PORTAL_RELEASE) { $env:PORTAL_RELEASE } else { "latest" }

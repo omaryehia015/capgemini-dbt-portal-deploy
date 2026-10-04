@@ -16,3 +16,6 @@ test-results/
 
 # Deploy secrets
 deploy/kubernetes/secrets.env
+
+# Built by deploy/client/installer/build.ps1; released signed by client-kit.yml
+deploy/client/download/*.exe

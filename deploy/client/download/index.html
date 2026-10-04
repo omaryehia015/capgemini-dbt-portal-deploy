@@ -77,7 +77,7 @@
     <ol class="steps">
       <li>Open <strong>Install-DbtPortal.cmd</strong> from your downloads.</li>
       <li>If Windows says it protected your PC, click <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
-      <li>Choose where your dbt project is (a Git repository, or a folder on this computer) and click <strong>Install</strong>.</li>
+      <li>Paste your token (if it is not filled in already) and click <strong>Install</strong>. That is the only question.</li>
     </ol>
     <p class="small" style="margin-top:12px">The window shows each step, then opens the portal and gives you the admin password. A <strong>dbt Portal</strong> shortcut is added to your desktop.</p>
   </section>
@@ -118,7 +118,7 @@
     $("win").hidden = os !== "win";
     $("unix").hidden = os !== "unix";
     var token = $("token-unix").value.trim() || "<paste your token>";
-    $("cmd").textContent = "curl -fsSL -H " + shq("Authorization: Bearer " + token) + " " + RAW + "install.sh \\\n  | PORTAL_TOKEN=" + shq(token) + " bash";
+    $("cmd").textContent = "curl -fsSL " + RAW + "install.sh | PORTAL_TOKEN=" + shq(token) + " bash";
     $("copied").hidden = true;
   }
 

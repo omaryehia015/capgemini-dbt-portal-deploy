@@ -14,9 +14,10 @@ one: the script starts them all and they restart on their own.
 
 Download **Install-DbtPortal.cmd** (from the download page,
 `deploy/client/download/`, or the portal release on GitHub) and open it. A
-window asks for the access token you were sent and where your dbt project is
-(a Git repository, or a folder on this computer), then installs everything,
-showing each step. It starts Docker Desktop or Podman if they are installed but
+window asks for one thing, the access token you were sent, then installs
+everything, showing each step (More options: a project folder on this computer,
+another install location). The dbt project is connected afterwards in the
+portal's Setup Assistant. It starts Docker Desktop or Podman if they are installed but
 not running, opens the portal, shows the admin password and puts a
 **dbt Portal** shortcut on the desktop. Run it again later to upgrade.
 

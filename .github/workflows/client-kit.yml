@@ -29,6 +29,8 @@ permissions:
 jobs:
   kit:
     runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.kit.outputs.release }}
     steps:
       - uses: actions/checkout@v6
       - name: Build the kit
@@ -74,3 +76,33 @@ jobs:
           else
             gh release create "$tag" "$ZIP" deploy/client/download/Install-DbtPortal.cmd --title "Portal $RELEASE" --notes "$notes"
           fi
+
+  # DbtPortalSetup.exe: the Windows app clients download. Published only when a
+  # code-signing certificate is configured: managed Windows machines block and
+  # remove an unsigned .exe that starts PowerShell. Secrets: CODESIGN_PFX_BASE64
+  # (the .pfx, base64) and CODESIGN_PASSWORD.
+  app:
+    needs: kit
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build, sign and attach the app
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ needs.kit.outputs.release }}
+          PFX: ${{ secrets.CODESIGN_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
+        run: |
+          if (-not $env:PFX) {
+            Write-Host "::notice::No code-signing certificate configured: DbtPortalSetup.exe is not published (clients use Install-DbtPortal.cmd)."
+            exit 0
+          }
+          .\deploy\client\installer\build.ps1 -Out out
+          $pfx = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          & $signtool.FullName sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f $pfx /p $env:PFX_PASSWORD out\DbtPortalSetup.exe
+          if ($LASTEXITCODE -ne 0) { throw "signing failed" }
+          Remove-Item $pfx
+          gh release upload "portal-$env:RELEASE" out\DbtPortalSetup.exe --clobber
