@@ -155,7 +155,8 @@ if ($inMachine) {
     # Moved for good: the next run must not stop and move it again.
     if ($code -eq 0 -and $oldEnv) { Rename-Item (Join-Path $dir ".env") ".env.moved-to-podman-machine" -Force }
 } else {
-    $setupArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $dir "setup.ps1"), "-NonInteractive", "-NoBrowser")
+    # -Release latest: every run installs, or upgrades to, the kit's newest release.
+    $setupArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $dir "setup.ps1"), "-NonInteractive", "-NoBrowser", "-Release", "latest")
     if ($env:PI_PROJECTS_ROOT) { $setupArgs += @("-ProjectsRoot", $env:PI_PROJECTS_ROOT) }
     if (-not (Test-Path (Join-Path $dir ".env")) -or -not (Select-String -Path (Join-Path $dir ".env") -Pattern '^PORTAL_PORT=\d' -Quiet)) {
         $setupArgs += @("-Port", $port)
@@ -200,7 +201,8 @@ PORTAL_TOKEN="$(cat "__TOKEN__")"; export PORTAL_TOKEN
 export PORTAL_PROJECTS_DISPLAY="__DISPLAY__"
 port=(--port __PORT__)
 if grep -q '^PORTAL_PORT=[0-9]' .env 2>/dev/null; then port=(); fi
-./setup.sh --non-interactive --no-browser "${port[@]}" __ROOTARG__
+# --release latest: every run installs, or upgrades to, the kit's newest release.
+./setup.sh --non-interactive --no-browser --release latest "${port[@]}" __ROOTARG__
 '@
 
 # -- The window ---------------------------------------------------------------
