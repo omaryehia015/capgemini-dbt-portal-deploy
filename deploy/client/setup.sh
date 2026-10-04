@@ -127,7 +127,9 @@ done
 if [[ -n "$GIT_MODE" ]]; then set_env DBT_PROJECT_PATH ""; else set_env DBT_PROJECT_PATH "$PROJECT"; fi
 # The host folder shared with the portal; empty falls back to an unused volume.
 set_env DBT_PROJECTS_ROOT "$PROJECTS_ROOT"
-set_env PORTAL_PROJECTS_HOST "$PROJECTS_ROOT"
+# PORTAL_PROJECTS_DISPLAY: the path people type for that folder, when it differs
+# (C:/work for /mnt/c/work, when this runs inside the Podman machine on Windows).
+set_env PORTAL_PROJECTS_HOST "${PORTAL_PROJECTS_DISPLAY:-$PROJECTS_ROOT}"
 [[ -n "$PORT" ]] && set_env PORTAL_PORT "$PORT"
 PORT="$(get_env PORTAL_PORT)"; PORT="${PORT:-8080}"
 for pair in "${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}"; do set_env "${pair%%=*}" "${pair#*=}"; done

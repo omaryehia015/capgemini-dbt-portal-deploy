@@ -80,7 +80,8 @@ set_env() {  # set_env KEY VALUE: replace or append, keep everything else
         printf '%s=%s\n' "$key" "$value" >> .env
     fi
 }
-get_env() { grep "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- || true; }
+# tr: a .env written on Windows has CRLF line ends.
+get_env() { grep "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r' || true; }
 
 wait_healthy() {  # wait_healthy PORT
     printf 'Waiting for the portal'

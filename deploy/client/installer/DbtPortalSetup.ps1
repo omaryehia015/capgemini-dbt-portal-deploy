@@ -61,6 +61,11 @@ if (-not $engine) {
     if (-not $engine) { Write-Output "Docker or Podman did not start. Start it, then click Try again."; exit 4 }
 }
 Write-Output "Using $engine"
+# Podman on Windows: the setup runs inside the Podman machine (Linux), with that
+# machine's own podman, registry login and paths. Nothing on the Windows side
+# (security policy, path translation, compose provider) can get in the way.
+$inMachine = $false
+if ($engine -eq "podman") { $inMachine = Quiet podman machine inspect }
 
 # 2. The client kit: a release's kit, the newest files (PORTAL_CHANNEL=main),
 #    or one already here (PORTAL_KIT_DIR)
@@ -94,45 +99,108 @@ if ($env:PORTAL_KIT_DIR) {
     $kit = Join-Path $tmp $name
     Write-Output "Release $release"
 }
-New-Item -ItemType Directory $dir -Force | Out-Null
-# An existing install keeps its .env (secrets, settings): upgrading keeps accounts.
-Get-ChildItem $kit -Force | Where-Object { $_.Name -ne ".env" } | Copy-Item -Destination $dir -Recurse -Force
+if (-not $inMachine) {
+    New-Item -ItemType Directory $dir -Force | Out-Null
+    # An existing install keeps its .env (secrets, settings): upgrading keeps accounts.
+    Get-ChildItem $kit -Force | Where-Object { $_.Name -ne ".env" } | Copy-Item -Destination $dir -Recurse -Force
+}
 
 # 3. Install and start
 Step 3 "Starting the portal (a few minutes the first time)"
-$setupArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $dir "setup.ps1"), "-NonInteractive", "-NoBrowser")
-if ($env:PI_PROJECTS_ROOT) { $setupArgs += @("-ProjectsRoot", $env:PI_PROJECTS_ROOT) }
-# A fresh install takes the first free port from 8080.
-if (-not (Test-Path (Join-Path $dir ".env")) -or -not (Select-String -Path (Join-Path $dir ".env") -Pattern '^PORTAL_PORT=\d' -Quiet)) {
-    $port = 8080
-    while ($port -lt 8100) {
-        $l = $null
-        try { $l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port); $l.Start(); $l.Stop(); break } catch { $port++ }
-    }
-    $setupArgs += @("-Port", $port)
+# A fresh install takes the first free port from 8080 (an existing one keeps its own).
+$port = 8080
+while ($port -lt 8100) {
+    try { $l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port); $l.Start(); $l.Stop(); break } catch { $port++ }
+}
+$script:portalUrl = $null
+function Clean($line) {
+    $text = if ($line -is [Management.Automation.ErrorRecord]) { $line.Exception.Message } else { "$line" }
+    # Colour codes and the empty error records native tools leave behind.
+    $text = $text -replace "\x1b\[[0-9;]*m", ""
+    if ($text -match 'Portal is up: (http://\S+?)/?$') { $script:portalUrl = $Matches[1] + "/" }
+    if ($text -ne "System.Management.Automation.RemoteException") { $text }
 }
 $ErrorActionPreference = "Continue"
-& powershell @setupArgs 2>&1 | ForEach-Object {
-    $line = if ($_ -is [Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
-    # Colour codes and the empty error records native tools leave behind.
-    $line = $line -replace "\x1b\[[0-9;]*m", ""
-    if ($line -ne "System.Management.Automation.RemoteException") { $line }
+if ($inMachine) {
+    # Windows paths as the machine sees them (C:\work -> /mnt/c/work).
+    function To-Machine($path) {
+        $full = [IO.Path]::GetFullPath($path)
+        "/mnt/" + $full.Substring(0, 1).ToLower() + ($full.Substring(2) -replace '\\', '/')
+    }
+    # Moving from a Windows-side install: stop it and bring its .env (same secrets,
+    # same compose project name, so accounts and history carry over).
+    $oldEnv = ""
+    if (Test-Path (Join-Path $dir ".env")) {
+        Write-Output "Moving the existing install into the Podman machine"
+        Push-Location $dir
+        & podman compose down 2>&1 | ForEach-Object { Clean $_ }
+        Pop-Location
+        $oldEnv = To-Machine (Join-Path $dir ".env")
+    }
+    $tokenFile = Join-Path $env:PI_WORK "token"
+    [IO.File]::WriteAllText($tokenFile, [string]$env:PORTAL_TOKEN)
+    $rootArg = ""; $display = ""
+    if ($env:PI_PROJECTS_ROOT) {
+        $rootArg = "--projects-root '" + (To-Machine $env:PI_PROJECTS_ROOT) + "'"
+        $display = ([IO.Path]::GetFullPath($env:PI_PROJECTS_ROOT)) -replace '\\', '/'
+    }
+    $bash = [IO.File]::ReadAllText((Join-Path $env:PI_WORK "setup-in-machine.template"))
+    $bash = $bash.Replace("__OLDENV__", $oldEnv).Replace("__KIT__", (To-Machine $kit)).Replace("__TOKEN__", (To-Machine $tokenFile))
+    $bash = $bash.Replace("__DISPLAY__", $display).Replace("__PORT__", "$port").Replace("__ROOTARG__", $rootArg)
+    $bashFile = Join-Path $env:PI_WORK "setup-in-machine.sh"
+    [IO.File]::WriteAllText($bashFile, ($bash -replace "`r`n", "`n"), (New-Object Text.ASCIIEncoding))
+    & podman machine ssh ("bash '" + (To-Machine $bashFile) + "'") 2>&1 | ForEach-Object { Clean $_ }
+    $code = $LASTEXITCODE
+    Remove-Item $tokenFile, $bashFile -ErrorAction SilentlyContinue
+    # Moved for good: the next run must not stop and move it again.
+    if ($code -eq 0 -and $oldEnv) { Rename-Item (Join-Path $dir ".env") ".env.moved-to-podman-machine" -Force }
+} else {
+    $setupArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $dir "setup.ps1"), "-NonInteractive", "-NoBrowser")
+    if ($env:PI_PROJECTS_ROOT) { $setupArgs += @("-ProjectsRoot", $env:PI_PROJECTS_ROOT) }
+    if (-not (Test-Path (Join-Path $dir ".env")) -or -not (Select-String -Path (Join-Path $dir ".env") -Pattern '^PORTAL_PORT=\d' -Quiet)) {
+        $setupArgs += @("-Port", $port)
+    }
+    & powershell @setupArgs 2>&1 | ForEach-Object { Clean $_ }
+    $code = $LASTEXITCODE
 }
-$code = $LASTEXITCODE
 if ($code -ne 0) { exit $code }
 
 # 4. Shortcuts: the portal opens like any other app
 Step 4 "Adding shortcuts"
-$envText = Get-Content (Join-Path $dir ".env") -Raw
-$port = ([regex]::Match($envText, '(?m)^PORTAL_PORT=(\d+)')).Groups[1].Value
-if (-not $port) { $port = "8080" }
-$url = "http://localhost:$port/"
+# The address setup printed ("Portal is up: http://localhost:8080").
+$url = if ($script:portalUrl) { $script:portalUrl } else { "http://localhost:$port/" }
 $shortcut = "[InternetShortcut]`r`nURL=$url`r`n"
 foreach ($folder in [Environment]::GetFolderPath("Desktop"), (Join-Path ([Environment]::GetFolderPath("Programs")) "")) {
     try { [IO.File]::WriteAllText((Join-Path $folder "dbt Portal.url"), $shortcut) } catch { }
 }
 Write-Output "##URL $url"
 exit 0
+'@
+
+# Runs inside the Podman machine (step 3 of the job fills in the __NAMES__).
+$MachineScript = @'
+set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
+mkdir -p "$HOME/.local/bin" "$HOME/dbt-portal"
+if ! command -v docker-compose >/dev/null 2>&1; then
+    echo "==> Adding docker compose to the Podman machine"
+    curl -fsSL -o "$HOME/.local/bin/docker-compose" \
+        https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64
+    chmod +x "$HOME/.local/bin/docker-compose"
+fi
+export PODMAN_COMPOSE_PROVIDER="$HOME/.local/bin/docker-compose"
+export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+cd "$HOME/dbt-portal"
+# An install moving in from the Windows side: its .env, with Linux line ends.
+[[ -f .env || -z "__OLDENV__" ]] || tr -d '\r' < "__OLDENV__" > .env
+# The kit, keeping this install's .env (secrets, settings).
+(cd "__KIT__" && tar --exclude=./.env -cf - .) | tar -xf -
+chmod +x ./*.sh
+PORTAL_TOKEN="$(cat "__TOKEN__")"; export PORTAL_TOKEN
+export PORTAL_PROJECTS_DISPLAY="__DISPLAY__"
+port=(--port __PORT__)
+if grep -q '^PORTAL_PORT=[0-9]' .env 2>/dev/null; then port=(); fi
+./setup.sh --non-interactive --no-browser "${port[@]}" __ROOTARG__
 '@
 
 # -- The window ---------------------------------------------------------------
@@ -392,6 +460,7 @@ $installButton.Add_Click({
         [Windows.Forms.MessageBox]::Show($form, "Choose the folder that holds your dbt project.", "dbt Portal") | Out-Null; return
     }
     $jobFile = Join-Path $Work "job.ps1"
+    [IO.File]::WriteAllText((Join-Path $Work "setup-in-machine.template"), $MachineScript)
     [IO.File]::WriteAllText($jobFile, $Job)
     if (Test-Path $LogFile) { Remove-Item $LogFile }
     $state.read = 0; $state.url = $null; $state.password = $null; $state.runtime = $false; $state.step = 0

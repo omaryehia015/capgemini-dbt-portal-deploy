@@ -16,8 +16,18 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     semantic service's contract (GET /api/version, cube_contract)
-latest: "2026.10.1"
+latest: "2026.10.2"
 releases:
+  "2026.10.2":
+    backend: "1.1.0"
+    frontend: "1.1.0"
+    cube: "1.0.1"
+    notes: >-
+      Set up from the browser: the dbt project (Git, or a folder on this
+      computer) and the variables it reads are entered in the Setup Assistant,
+      with no .env to maintain. Windows installer: download, paste the token,
+      click Install (on Podman it installs inside the Podman machine). Fixes a
+      .env that grew on every Windows setup run.
   "2026.10.1":
     backend: "1.0.1"
     frontend: "1.0.0"

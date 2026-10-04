@@ -21,6 +21,11 @@ portal's Setup Assistant. It starts Docker Desktop or Podman if they are install
 not running, opens the portal, shows the admin password and puts a
 **dbt Portal** shortcut on the desktop. Run it again later to upgrade.
 
+With Podman, the setup runs inside the Podman machine (Linux): its own podman,
+registry login and paths, so nothing on the Windows side gets in the way. The
+install lives in `~/dbt-portal` there (`podman machine ssh ~/dbt-portal/manage.sh status`).
+An install made earlier on the Windows side is moved in, with its accounts.
+
 Windows may warn that it protected your PC (the file is not signed yet): click
 **More info**, then **Run anyway**.
 
