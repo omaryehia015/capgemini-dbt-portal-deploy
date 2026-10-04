@@ -180,12 +180,32 @@ function Sign-In($user, $plain) {
     $plain | & $E login ($registry -split '/')[0] -u $user --password-stdin *> $null
     if ($LASTEXITCODE -ne 0) { Fail "The registry did not accept that token." }
     Ok "Signed in to $(($registry -split '/')[0])"
+    Test-ImageAccess $user $plain
+}
+# GHCR also signs in tokens that cannot read the packages, and the pull would
+# fail minutes later: ask for one image's manifest first, as the pull will.
+function Test-ImageAccess($user, $plain) {
+    $registry = if (Get-Env IMAGE_REGISTRY) { Get-Env IMAGE_REGISTRY } else { "ghcr.io/omaryehia015" }
+    $parts = $registry -split '/', 2
+    if ($parts[0] -ne "ghcr.io") { return }
+    $repo = $parts[1] + "/capgemini-dbt-portal-backend"
+    $tag = if (Get-Env BACKEND_TAG) { Get-Env BACKEND_TAG } else { "latest" }
+    $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${user}:$plain"))
+    $accept = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
+    try {
+        $t = Invoke-RestMethod -TimeoutSec 20 -Headers @{ Authorization = "Basic $basic" } "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io"
+        Invoke-WebRequest -UseBasicParsing -Method Head -TimeoutSec 20 -Headers @{ Authorization = "Bearer $($t.token)"; Accept = $accept } "https://ghcr.io/v2/$repo/manifests/$tag" | Out-Null
+    } catch {
+        Fail "This token cannot download the portal images. Ask for a new one: a GitHub token (classic) with the read:packages scope, made by an account that can see the portal packages. ($repo`:$tag)"
+    }
+    Ok "The token can download the portal images"
 }
 # Podman with an external compose provider (docker-compose) pulls without the
 # login podman keeps, so podman pulls the images itself and compose finds them.
 function Pull-Images {
     if ($E -eq "podman") {
-        $images = & $E compose config --images 2>$null | Where-Object { $_ -and $_ -notmatch '^>>>>' } | Sort-Object -Unique
+        # Private images first: a token problem shows before the big downloads.
+        $images = & $E compose config --images 2>$null | Where-Object { $_ -and $_ -notmatch '^>>>>' } | Sort-Object -Unique -Descending
         if ($images) {
             foreach ($image in $images) {
                 Write-Host "  $image"

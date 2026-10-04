@@ -404,6 +404,7 @@ function Show-Lines([string[]]$lines) {
             continue
         }
         if ($line -eq "##NEEDS_RUNTIME") { $state.runtime = $true; continue }
+        if ($line -match "token cannot download the portal images|did not accept that token") { $state.badToken = $true }
         if ($line -match '^##URL (\S+)') { $state.url = $Matches[1]; continue }
         if ($line -match '\|\s+admin\s+(\S+)\s*$') { $state.password = $Matches[1] }
         if ($line -match '^==> (.*)$') { $detailLabel.Text = $Matches[1] }
@@ -444,7 +445,9 @@ $timer.Add_Tick({
             if ($state.url) { Start-Process ($state.url + "setup") }
         } else {
             $stepLabel.Text = "The install stopped"
-            if ($state.runtime) {
+            if ($state.badToken) {
+                $failText.Text = "This token cannot download the portal. Ask for a new one (a GitHub token, classic, with read:packages), then click Try again and paste it."
+            } elseif ($state.runtime) {
                 $failText.Text = "The portal runs in Docker. Install Docker Desktop, start it, then click Try again."
                 $getDocker.Visible = $true
             } else {
@@ -465,7 +468,7 @@ $installButton.Add_Click({
     [IO.File]::WriteAllText((Join-Path $Work "setup-in-machine.template"), $MachineScript)
     [IO.File]::WriteAllText($jobFile, $Job)
     if (Test-Path $LogFile) { Remove-Item $LogFile }
-    $state.read = 0; $state.url = $null; $state.password = $null; $state.runtime = $false; $state.step = 0
+    $state.read = 0; $state.url = $null; $state.password = $null; $state.runtime = $false; $state.badToken = $false; $state.step = 0
     $logBox.Clear(); $bar.Value = 0; $doneBox.Visible = $false; $failBox.Visible = $false; $getDocker.Visible = $false
 
     $env:PORTAL_TOKEN = $token

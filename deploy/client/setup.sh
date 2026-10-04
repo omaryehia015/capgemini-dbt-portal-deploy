@@ -179,13 +179,30 @@ registry_login() {  # registry_login USER TOKEN
     printf '%s' "$2" | "$E" login "${registry%%/*}" -u "$1" --password-stdin >/dev/null 2>&1 \
         || fail "The registry did not accept that token."
     ok "Signed in to ${registry%%/*}"
+    check_image_access "$1" "$2"
+}
+# GHCR also signs in tokens that cannot read the packages, and the pull would
+# fail minutes later: ask for one image's manifest first, as the pull will.
+check_image_access() {  # check_image_access USER TOKEN
+    local registry repo tag bearer code
+    registry="$(get_env IMAGE_REGISTRY)"; registry="${registry:-ghcr.io/omaryehia015}"
+    [[ "${registry%%/*}" == ghcr.io ]] || return 0
+    repo="${registry#*/}/capgemini-dbt-portal-backend"
+    tag="$(get_env BACKEND_TAG)"; tag="${tag:-latest}"
+    bearer="$(curl -sS --max-time 20 -u "$1:$2" "https://ghcr.io/token?scope=repository:$repo:pull&service=ghcr.io" \
+        | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" || true
+    code="$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' -I -H "Authorization: Bearer $bearer" \
+        -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+        "https://ghcr.io/v2/$repo/manifests/$tag")" || code=000
+    [[ "$code" == 200 ]] || fail "This token cannot download the portal images. Ask for a new one: a GitHub token (classic) with the read:packages scope, made by an account that can see the portal packages. (GitHub answered $code for $repo:$tag.)"
+    ok "The token can download the portal images"
 }
 # Podman with an external compose provider (docker-compose) pulls without the
 # login podman keeps, so podman pulls the images itself and compose finds them.
 pull_images() {
     local images image
     if [[ "$E" == podman ]]; then
-        images="$("${C[@]}" config --images 2>/dev/null | grep -v '^>>>>' | sort -u)" || true
+        images="$("${C[@]}" config --images 2>/dev/null | grep -v '^>>>>' | sort -ru)" || true
         if [[ -n "$images" ]]; then
             for image in $images; do echo "  $image"; podman pull "$image" || return 1; done
             return 0
