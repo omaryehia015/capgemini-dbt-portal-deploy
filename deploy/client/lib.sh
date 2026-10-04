@@ -83,10 +83,20 @@ set_env() {  # set_env KEY VALUE: replace or append, keep everything else
 # tr: a .env written on Windows has CRLF line ends.
 get_env() { grep "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r' || true; }
 
-wait_healthy() {  # wait_healthy PORT
+# Ports: something listening, and whether that is this portal (its API answers).
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+port_is_portal() { curl -fs --max-time 3 "http://localhost:$1/api/version" 2>/dev/null | grep -q '"api_version"'; }
+choose_port() {  # choose_port PORT: that port when free or already the portal, else the next free one
+    local p
+    if ! port_busy "$1" || port_is_portal "$1"; then echo "$1"; return; fi
+    for ((p = $1 + 1; p < $1 + 100; p++)); do port_busy "$p" || { echo "$p"; return; }; done
+    echo "$1"
+}
+
+wait_healthy() {  # wait_healthy PORT: until the portal itself answers there (not another program)
     printf 'Waiting for the portal'
     for _ in $(seq 1 60); do
-        curl -fs "http://localhost:$1/api/health" >/dev/null 2>&1 && { echo; return 0; }
+        port_is_portal "$1" && { echo; return 0; }
         printf '.'; sleep 5
     done
     echo

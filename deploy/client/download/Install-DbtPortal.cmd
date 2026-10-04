@@ -114,10 +114,32 @@ if (-not $inMachine) {
 
 # 3. Install and start
 Step 3 "Starting the portal (a few minutes the first time)"
-# A fresh install takes the first free port from 8080 (an existing one keeps its own).
-$port = 8080
-while ($port -lt 8100) {
-    try { $l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port); $l.Start(); $l.Stop(); break } catch { $port++ }
+# The port: this install's own (kept when free or already the portal), else the
+# first free one from 8080. Checked on Windows, where people open the portal:
+# a Windows program on the port would otherwise get the portal's traffic.
+function Test-PortBusy($p) {
+    $addresses = @([Net.IPAddress]::Any, [Net.IPAddress]::Loopback)
+    if ([Net.Sockets.Socket]::OSSupportsIPv6) { $addresses += [Net.IPAddress]::IPv6Loopback }
+    foreach ($address in $addresses) {
+        try { $l = New-Object Net.Sockets.TcpListener($address, $p); $l.Start(); $l.Stop() } catch { return $true }
+    }
+    return $false
+}
+function Test-PortIsPortal($p) {
+    try { return [bool](Invoke-RestMethod -TimeoutSec 3 "http://localhost:$p/api/version").api_version } catch { return $false }
+}
+$current = $null
+if ($inMachine) {
+    $line = & podman machine ssh "grep -m1 '^PORTAL_PORT=' ~/dbt-portal/.env 2>/dev/null" 2>$null
+} else {
+    $line = Get-Content (Join-Path $dir ".env") -ErrorAction SilentlyContinue | Where-Object { $_ -match '^PORTAL_PORT=' } | Select-Object -First 1
+}
+if ("$line" -match 'PORTAL_PORT=(\d+)') { $current = [int]$Matches[1] }
+$wanted = if ($current) { $current } else { 8080 }
+$port = $wanted
+if ((Test-PortBusy $wanted) -and -not (Test-PortIsPortal $wanted)) {
+    for ($p = $wanted + 1; $p -lt $wanted + 100; $p++) { if (-not (Test-PortBusy $p)) { $port = $p; break } }
+    Write-Output "##NOTE Port $wanted is used by another program, so the portal uses port $port."
 }
 $script:portalUrl = $null
 function Clean($line) {
@@ -165,9 +187,7 @@ if ($inMachine) {
     # -Release latest: every run installs, or upgrades to, the kit's newest release.
     $setupArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $dir "setup.ps1"), "-NonInteractive", "-NoBrowser", "-Release", "latest")
     if ($env:PI_PROJECTS_ROOT) { $setupArgs += @("-ProjectsRoot", $env:PI_PROJECTS_ROOT) }
-    if (-not (Test-Path (Join-Path $dir ".env")) -or -not (Select-String -Path (Join-Path $dir ".env") -Pattern '^PORTAL_PORT=\d' -Quiet)) {
-        $setupArgs += @("-Port", $port)
-    }
+    $setupArgs += @("-Port", $port)
     & powershell @setupArgs 2>&1 | ForEach-Object { Clean $_ }
     $code = $LASTEXITCODE
 }
@@ -207,7 +227,6 @@ chmod +x ./*.sh
 PORTAL_TOKEN="$(cat "__TOKEN__")"; export PORTAL_TOKEN
 export PORTAL_PROJECTS_DISPLAY="__DISPLAY__"
 port=(--port __PORT__)
-if grep -q '^PORTAL_PORT=[0-9]' .env 2>/dev/null; then port=(); fi
 # --release latest: every run installs, or upgrades to, the kit's newest release.
 ./setup.sh --non-interactive --no-browser --release latest "${port[@]}" __ROOTARG__
 '@
@@ -375,7 +394,7 @@ $openButton.BackColor = $blue
 $openButton.ForeColor = [Drawing.Color]::White
 $openButton.FlatStyle = "Flat"
 $openButton.Font = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
-$doneNote = New-Label "A 'dbt Portal' shortcut is on your desktop. The Setup Assistant takes it from here." 0 64 510 40 9 $false $muted
+$doneNote = New-Label "A 'dbt Portal' shortcut is on your desktop. The Setup Assistant takes it from here." 0 60 510 56 9 $false $muted
 $doneBox.Controls.AddRange(@($passBox, $copyButton, $openButton, $doneNote))
 
 $failBox = New-Object Windows.Forms.Panel
@@ -413,6 +432,7 @@ function Show-Lines([string[]]$lines) {
         if ($line -eq "##NEEDS_RUNTIME") { $state.runtime = $true; continue }
         if ($line -match "token cannot download the portal images|did not accept that token") { $state.badToken = $true }
         if ($line -match '^##URL (\S+)') { $state.url = $Matches[1]; continue }
+        if ($line -match '^##NOTE (.*)$') { $state.note = $Matches[1]; $detailLabel.Text = $Matches[1]; $logBox.AppendText($Matches[1] + "`r`n"); continue }
         if ($line -match '\|\s+admin\s+(\S+)\s*$') { $state.password = $Matches[1] }
         if ($line -match '^==> (.*)$') { $detailLabel.Text = $Matches[1] }
         if ($line.Trim()) { $logBox.AppendText($line + "`r`n") }
@@ -448,6 +468,7 @@ $timer.Add_Tick({
             $detailLabel.Text = if ($state.url) { $state.url } else { "" }
             if ($state.password) { $passBox.Text = $state.password }
             else { $passBox.Text = "(set earlier: the accounts already exist)" }
+            if ($state.note) { $doneNote.Text = $state.note + " " + $doneNote.Text }
             $doneBox.Visible = $true
             if ($state.url) { Start-Process ($state.url + "setup") }
         } else {
@@ -475,7 +496,7 @@ $installButton.Add_Click({
     [IO.File]::WriteAllText((Join-Path $Work "setup-in-machine.template"), $MachineScript)
     [IO.File]::WriteAllText($jobFile, $Job)
     if (Test-Path $LogFile) { Remove-Item $LogFile }
-    $state.read = 0; $state.url = $null; $state.password = $null; $state.runtime = $false; $state.badToken = $false; $state.step = 0
+    $state.read = 0; $state.url = $null; $state.password = $null; $state.runtime = $false; $state.badToken = $false; $state.note = $null; $state.step = 0
     $logBox.Clear(); $bar.Value = 0; $doneBox.Visible = $false; $failBox.Visible = $false; $getDocker.Visible = $false
 
     $env:PORTAL_TOKEN = $token

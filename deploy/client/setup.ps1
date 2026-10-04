@@ -132,6 +132,12 @@ if ($ProjectsRoot) {
 }
 if ($Port -gt 0) { Set-Env PORTAL_PORT $Port }
 $Port = if (Get-Env PORTAL_PORT) { [int](Get-Env PORTAL_PORT) } else { 8080 }
+# Taken by another program (or reserved by Windows): move to the next free port rather than fail.
+$chosen = Select-Port $Port
+if ($chosen -ne $Port) {
+    Warn "Port $Port is used by another program: the portal uses port $chosen instead."
+    $Port = $chosen; Set-Env PORTAL_PORT $Port
+}
 foreach ($key in $extraEnv.Keys) { Set-Env $key $extraEnv[$key] }
 if ($extraEnv.Count) { Say "Applied $($extraEnv.Count) setting(s) from $Answers" }
 # Bind mounts on Windows show every file as root-owned: run as root so `dbt deps` can write.

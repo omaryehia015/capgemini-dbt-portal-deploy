@@ -77,11 +77,32 @@ function Set-Env($key, $value) {
     [IO.File]::WriteAllLines($file, [string[]]$lines, (New-Object Text.UTF8Encoding $false))
 }
 
+# Ports: whether something holds one (a program, or a range Windows reserves for
+# Hyper-V/WSL), and whether that is this portal (its API answers).
+function Test-PortBusy($port) {
+    $addresses = @([Net.IPAddress]::Any, [Net.IPAddress]::Loopback)
+    if ([Net.Sockets.Socket]::OSSupportsIPv6) { $addresses += [Net.IPAddress]::IPv6Loopback }
+    foreach ($address in $addresses) {
+        try { $l = New-Object Net.Sockets.TcpListener($address, $port); $l.Start(); $l.Stop() } catch { return $true }
+    }
+    return $false
+}
+function Test-PortIsPortal($port) {
+    try { return [bool](Invoke-RestMethod -TimeoutSec 3 "http://localhost:$port/api/version").api_version } catch { return $false }
+}
+# That port when it is free or already the portal, else the next free one.
+function Select-Port([int]$port) {
+    if (-not (Test-PortBusy $port) -or (Test-PortIsPortal $port)) { return $port }
+    for ($p = $port + 1; $p -lt $port + 100; $p++) { if (-not (Test-PortBusy $p)) { return $p } }
+    return $port
+}
+
 function Wait-Healthy($port) {
     Write-Host -NoNewline "Waiting for the portal"
     for ($i = 0; $i -lt 60; $i++) {
-        try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "http://localhost:$port/api/health" | Out-Null; Write-Host ""; return $true }
-        catch { Write-Host -NoNewline "."; Start-Sleep -Seconds 5 }
+        # The portal itself, not another program on that port.
+        if (Test-PortIsPortal $port) { Write-Host ""; return $true }
+        Write-Host -NoNewline "."; Start-Sleep -Seconds 5
     }
     Write-Host ""
     return $false

@@ -132,6 +132,12 @@ set_env DBT_PROJECTS_ROOT "$PROJECTS_ROOT"
 set_env PORTAL_PROJECTS_HOST "${PORTAL_PROJECTS_DISPLAY:-$PROJECTS_ROOT}"
 [[ -n "$PORT" ]] && set_env PORTAL_PORT "$PORT"
 PORT="$(get_env PORTAL_PORT)"; PORT="${PORT:-8080}"
+# Taken by another program: move to the next free port rather than fail.
+chosen="$(choose_port "$PORT")"
+if [[ "$chosen" != "$PORT" ]]; then
+    warn "Port $PORT is used by another program: the portal uses port $chosen instead."
+    PORT="$chosen"; set_env PORTAL_PORT "$PORT"
+fi
 for pair in "${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}"; do set_env "${pair%%=*}" "${pair#*=}"; done
 [[ ${#EXTRA_ENV[@]} -gt 0 ]] && say "Applied ${#EXTRA_ENV[@]} setting(s) from $ANSWERS"
 
