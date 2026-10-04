@@ -16,8 +16,17 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     semantic service's contract (GET /api/version, cube_contract)
-latest: "2026.10.2"
+latest: "2026.10.3"
 releases:
+  "2026.10.3":
+    backend: "1.1.1"
+    frontend: "1.1.0"
+    cube: "1.0.1"
+    notes: >-
+      A lost admin password can be replaced: the setup window offers "Forgot
+      the admin password?", and manage reset-password does the same. Running
+      the installer again keeps a shared project folder, and the portal moves
+      to a free port when another program took its own.
   "2026.10.2":
     backend: "1.1.0"
     frontend: "1.1.0"

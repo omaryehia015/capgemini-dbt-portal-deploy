@@ -6,6 +6,7 @@
 #   .\manage.ps1 doctor                 check this machine and the stack
 #   .\manage.ps1 upgrade [release]      move to a release from releases.yml (default: latest)
 #   .\manage.ps1 backup                 dump the portal databases to backups\
+#   .\manage.ps1 reset-password [user]  a new password for an account (default: admin), shown once
 #   .\manage.ps1 services               the service names, and what each does
 #   .\manage.ps1 help
 param(
@@ -68,10 +69,13 @@ switch ($Command) {
     "upgrade" {
         $release = if ($Rest.Count) { $Rest[0] } else { "latest" }
         $project = Get-Env DBT_PROJECT_PATH
-        if (-not $project) { Fail "DBT_PROJECT_PATH is not set in .env." }
-        if (-not [IO.Path]::IsPathRooted($project)) { $project = (Resolve-Path (Join-Path $Root $project)).Path }
         Say "Upgrading to $release (accounts, history and settings are kept)"
-        & (Join-Path $PSScriptRoot "setup.ps1") -Project $project -Release $release -NonInteractive
+        if ($project) {
+            if (-not [IO.Path]::IsPathRooted($project)) { $project = (Resolve-Path (Join-Path $Root $project)).Path }
+            & (Join-Path $PSScriptRoot "setup.ps1") -Project $project -Release $release -NonInteractive
+        } else {
+            & (Join-Path $PSScriptRoot "setup.ps1") -Release $release -NonInteractive
+        }
     }
     "backup" {
         Need-Runtime
@@ -96,6 +100,16 @@ switch ($Command) {
   redis       job queue and live logs
 "@
     }
-    { $_ -in "help", "-h", "--help" } { Get-Content $PSCommandPath -TotalCount 10 | ForEach-Object { $_ -replace '^# ?', '' } }
+    "reset-password" {
+        Need-Runtime
+        $user = if ($Rest.Count) { $Rest[0] } else { "admin" }
+        # The accounts live in the identity service (the backend on a single node).
+        $ErrorActionPreference = "Continue"
+        $svc = if ((& $script:E compose config --services 2>$null) -contains "identity") { "identity" } else { "backend" }
+        Say "A new password for $user"
+        & $script:E compose exec -T $svc python -m app.reset_password $user
+        if ($LASTEXITCODE -ne 0) { Fail "Could not reset the password (see above)." }
+    }
+    { $_ -in "help", "-h", "--help" } { Get-Content $PSCommandPath -TotalCount 11 | ForEach-Object { $_ -replace '^# ?', '' } }
     default { Fail "Unknown command '$Command'. Run .\manage.ps1 help" }
 }

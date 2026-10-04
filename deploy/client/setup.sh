@@ -85,7 +85,9 @@ fi
 # -- 2. The dbt project --------------------------------------------------------
 # No folder given: the portal gets the project from a Git repository you connect
 # in its Setup Assistant (the portal keeps its own copy). A folder is mounted live.
-if [[ -z "$PROJECT" && -z "$PROJECTS_ROOT" && -z "$NON_INTERACTIVE" ]]; then
+# An existing install keeps the folder it shares unless another one is given.
+SHARED_BEFORE="$(get_env DBT_PROJECTS_ROOT)"
+if [[ -z "$PROJECT" && -z "$PROJECTS_ROOT" && -z "$NON_INTERACTIVE" && -z "$SHARED_BEFORE" && ! -f .env ]]; then
     say "Your dbt project"
     echo "  1) A Git repository (you connect it in the portal; recommended)"
     echo "  2) A folder on this machine (you pick the project in the portal)"
@@ -125,11 +127,15 @@ for key in JWT_SECRET CUBE_API_SECRET POSTGRES_PASSWORD REDIS_PASSWORD; do
 done
 # Empty: compose falls back to its own workspace volume, where the portal clones the repository.
 if [[ -n "$GIT_MODE" ]]; then set_env DBT_PROJECT_PATH ""; else set_env DBT_PROJECT_PATH "$PROJECT"; fi
-# The host folder shared with the portal; empty falls back to an unused volume.
-set_env DBT_PROJECTS_ROOT "$PROJECTS_ROOT"
-# PORTAL_PROJECTS_DISPLAY: the path people type for that folder, when it differs
-# (C:/work for /mnt/c/work, when this runs inside the Podman machine on Windows).
-set_env PORTAL_PROJECTS_HOST "${PORTAL_PROJECTS_DISPLAY:-$PROJECTS_ROOT}"
+# The host folder shared with the portal (kept from before when none is given;
+# empty falls back to an unused volume).
+if [[ -n "$PROJECTS_ROOT" ]]; then
+    set_env DBT_PROJECTS_ROOT "$PROJECTS_ROOT"
+    # PORTAL_PROJECTS_DISPLAY: the path people type for that folder, when it differs
+    # (C:/work for /mnt/c/work, when this runs inside the Podman machine on Windows).
+    set_env PORTAL_PROJECTS_HOST "${PORTAL_PROJECTS_DISPLAY:-$PROJECTS_ROOT}"
+fi
+[[ -n "$PROJECTS_ROOT" ]] || PROJECTS_ROOT="$SHARED_BEFORE"
 [[ -n "$PORT" ]] && set_env PORTAL_PORT "$PORT"
 PORT="$(get_env PORTAL_PORT)"; PORT="${PORT:-8080}"
 # Taken by another program: move to the next free port rather than fail.

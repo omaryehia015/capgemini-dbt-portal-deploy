@@ -71,7 +71,9 @@ if ($Answers) {
 # -- 2. The dbt project --------------------------------------------------------
 # No folder given: the portal gets the project from a Git repository you connect
 # in its Setup Assistant (the portal keeps its own copy). A folder is mounted live.
-if (-not $Project -and -not $ProjectsRoot -and -not $NonInteractive) {
+# An existing install keeps the folder it shares unless another one is given.
+$sharedBefore = Get-Env DBT_PROJECTS_ROOT
+if (-not $Project -and -not $ProjectsRoot -and -not $NonInteractive -and -not $sharedBefore -and -not (Test-Path .env)) {
     Say "Your dbt project"
     Write-Host "  1) A Git repository (you connect it in the portal; recommended)"
     Write-Host "  2) A folder on this machine (you pick the project in the portal)"
@@ -122,13 +124,11 @@ if ($GitMode) {
 } else {
     Set-Env DBT_PROJECT_PATH (Get-MountPath $Project)
 }
-# The host folder shared with the portal; empty falls back to an unused volume.
+# The host folder shared with the portal (kept from before when none is given;
+# empty falls back to an unused volume).
 if ($ProjectsRoot) {
     Set-Env DBT_PROJECTS_ROOT (Get-MountPath $ProjectsRoot)
     Set-Env PORTAL_PROJECTS_HOST ($ProjectsRoot -replace '\\', '/')
-} else {
-    Set-Env DBT_PROJECTS_ROOT ""
-    Set-Env PORTAL_PROJECTS_HOST ""
 }
 if ($Port -gt 0) { Set-Env PORTAL_PORT $Port }
 $Port = if (Get-Env PORTAL_PORT) { [int](Get-Env PORTAL_PORT) } else { 8080 }
@@ -141,7 +141,7 @@ if ($chosen -ne $Port) {
 foreach ($key in $extraEnv.Keys) { Set-Env $key $extraEnv[$key] }
 if ($extraEnv.Count) { Say "Applied $($extraEnv.Count) setting(s) from $Answers" }
 # Bind mounts on Windows show every file as root-owned: run as root so `dbt deps` can write.
-if (-not $GitMode -or $ProjectsRoot) { Set-Env PORTAL_USER "0:0" }
+if (-not $GitMode -or $ProjectsRoot -or $sharedBefore) { Set-Env PORTAL_USER "0:0" }
 
 if ($Release) {
     $text = Get-Content releases.yml -Raw -Encoding UTF8

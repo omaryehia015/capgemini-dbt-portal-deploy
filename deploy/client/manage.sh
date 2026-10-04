@@ -7,6 +7,7 @@
 #   ./manage.sh doctor                 check this machine and the stack
 #   ./manage.sh upgrade [release]      move to a release from releases.yml (default: latest)
 #   ./manage.sh backup                 dump the portal databases to backups/
+#   ./manage.sh reset-password [user]  a new password for an account (default: admin), shown once
 #   ./manage.sh services               the service names, and what each does
 #   ./manage.sh help
 set -euo pipefail
@@ -72,9 +73,9 @@ case "$cmd" in
     upgrade)
         release="${1:-latest}"
         project="$(get_env DBT_PROJECT_PATH)"
-        [[ -n "$project" ]] || fail "DBT_PROJECT_PATH is not set in .env."
         say "Upgrading to $release (accounts, history and settings are kept)"
-        exec "$here/setup.sh" "$project" --release "$release" --non-interactive
+        if [[ -n "$project" ]]; then exec "$here/setup.sh" "$project" --release "$release" --non-interactive; fi
+        exec "$here/setup.sh" --release "$release" --non-interactive
         ;;
     backup)
         need_runtime
@@ -97,6 +98,14 @@ case "$cmd" in
   redis       job queue and live logs
 EOF
         ;;
-    help|-h|--help) sed -n '2,12p' "$0" ;;
+    reset-password)
+        need_runtime
+        # The accounts live in the identity service (the backend on a single node).
+        svc=identity
+        "${C[@]}" config --services 2>/dev/null | grep -qx identity || svc=backend
+        say "A new password for ${1:-admin}"
+        "${C[@]}" exec -T "$svc" python -m app.reset_password "${1:-admin}"
+        ;;
+    help|-h|--help) sed -n '2,13p' "$0" ;;
     *) fail "Unknown command '$cmd'. Run ./manage.sh help" ;;
 esac

@@ -158,6 +158,7 @@ From the folder with `compose.yaml` (on Windows: `.\manage.ps1 <command>`):
 ./manage.sh doctor              # check this machine, the containers and the project
 ./manage.sh upgrade 2026.11.0   # move to a release from releases.yml (default: latest)
 ./manage.sh backup              # dump the portal databases to backups/
+./manage.sh reset-password      # a new admin password (or: reset-password <user>), shown once
 ./manage.sh services            # what each service does
 ```
 
@@ -170,7 +171,7 @@ More dbt jobs at once: `./setup.sh <project> --workers 3`.
 | `doctor` says Docker/Podman is not running | Start Docker Desktop / Podman Desktop, then run the command again. |
 | A service is `unhealthy` or keeps restarting | `./manage.sh logs <service>`. The execution service's log starts with an `[OK]`/`[WARN]`/`[FAIL]` self-check of the project, the warehouse connection and the configuration. |
 | The portal does not answer | `./manage.sh logs frontend execution`; check nothing else uses the port (`--port 8081` to move it). |
-| Lost the first passwords | Another admin sets a new one in Governance → Users. `./manage.sh logs identity` still shows them until the container is recreated. |
+| Lost the admin password | Run the setup app again and click **Forgot the admin password?**, or `./manage.sh reset-password` (`.\manage.ps1 reset-password`; inside the Podman machine: `podman machine ssh "cd ~/dbt-portal && ./manage.sh reset-password"`). It prints a new one, once. Another admin can also set one in Governance → Users. |
 | A module's Test connection fails | The failing line says why; its setup guide on the module page lists the usual fixes. |
 
 **Uninstall:** `docker compose down -v` (deletes the accounts and history).

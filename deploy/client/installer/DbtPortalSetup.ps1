@@ -195,6 +195,7 @@ foreach ($folder in [Environment]::GetFolderPath("Desktop"), (Join-Path ([Enviro
     try { [IO.File]::WriteAllText((Join-Path $folder "dbt Portal.url"), $shortcut) } catch { }
 }
 Write-Output "##URL $url"
+Write-Output ("##MODE " + $(if ($inMachine) { "machine" } else { "windows" }))
 exit 0
 '@
 
@@ -388,7 +389,35 @@ $openButton.ForeColor = [Drawing.Color]::White
 $openButton.FlatStyle = "Flat"
 $openButton.Font = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
 $doneNote = New-Label "A 'dbt Portal' shortcut is on your desktop. The Setup Assistant takes it from here." 0 60 510 56 9 $false $muted
-$doneBox.Controls.AddRange(@($passBox, $copyButton, $openButton, $doneNote))
+# Lost the admin password? A new one, shown once, like the first.
+$forgotLink = New-Object Windows.Forms.LinkLabel
+$forgotLink.Text = "Forgot the admin password? Get a new one"
+$forgotLink.Location = New-Object Drawing.Point(0, 126)
+$forgotLink.Size = New-Object Drawing.Size(320, 22)
+$forgotLink.Visible = $false
+$resetAdmin = {
+    $form.Cursor = "WaitCursor"
+    $forgotLink.Text = "Setting a new password..."
+    try {
+        $ErrorActionPreference = "Continue"
+        if ($state.mode -eq "machine") {
+            $out = & podman machine ssh "cd ~/dbt-portal && ./manage.sh reset-password admin" 2>&1 | ForEach-Object { "$_" }
+        } else {
+            $out = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dirBox.Text.Trim() "manage.ps1") reset-password admin 2>&1 | ForEach-Object { "$_" }
+        }
+        $new = $out | Select-String -Pattern '^\s+admin\s+(\S+)\s*$' | Select-Object -Last 1
+        if ($new) {
+            $passBox.Text = $new.Matches[0].Groups[1].Value
+            $forgotLink.Visible = $false
+            $logBox.AppendText("A new admin password was set (shown above, once).`r`n")
+        } else {
+            $forgotLink.Text = "Could not set a new password: see the log"
+            $logBox.AppendText((($out | Select-Object -Last 8) -join "`r`n") + "`r`n")
+        }
+    } finally { $form.Cursor = "Default" }
+}
+$forgotLink.Add_LinkClicked($resetAdmin)
+$doneBox.Controls.AddRange(@($passBox, $copyButton, $openButton, $doneNote, $forgotLink))
 
 $failBox = New-Object Windows.Forms.Panel
 $failBox.Location = New-Object Drawing.Point(24, 300)
@@ -425,6 +454,7 @@ function Show-Lines([string[]]$lines) {
         if ($line -eq "##NEEDS_RUNTIME") { $state.runtime = $true; continue }
         if ($line -match "token cannot download the portal images|did not accept that token") { $state.badToken = $true }
         if ($line -match '^##URL (\S+)') { $state.url = $Matches[1]; continue }
+        if ($line -match '^##MODE (\S+)') { $state.mode = $Matches[1]; continue }
         if ($line -match '^##NOTE (.*)$') { $state.note = $Matches[1]; $detailLabel.Text = $Matches[1]; $logBox.AppendText($Matches[1] + "`r`n"); continue }
         if ($line -match '\|\s+admin\s+(\S+)\s*$') { $state.password = $Matches[1] }
         if ($line -match '^==> (.*)$') { $detailLabel.Text = $Matches[1] }
@@ -448,6 +478,10 @@ $timer.Add_Tick({
     if ($state.proc -and $state.proc.HasExited) {
         $timer.Stop()
         if ($Unattended) {
+            if ($env:PORTAL_INSTALL_RESET -eq "1" -and $state.proc.ExitCode -eq 0 -and -not $state.password) {
+                & $resetAdmin
+                if ($passBox.Text -notmatch '^\(') { $state.password = $passBox.Text }
+            }
             if ($env:PORTAL_INSTALL_RESULT) {
                 "exit=$($state.proc.ExitCode) url=$($state.url) password_found=$([bool]$state.password)" | Set-Content $env:PORTAL_INSTALL_RESULT
                 Copy-Item $LogFile ($env:PORTAL_INSTALL_RESULT + ".log") -ErrorAction SilentlyContinue
@@ -460,7 +494,10 @@ $timer.Add_Tick({
             $stepLabel.Text = "The portal is running"
             $detailLabel.Text = if ($state.url) { $state.url } else { "" }
             if ($state.password) { $passBox.Text = $state.password }
-            else { $passBox.Text = "(set earlier: the accounts already exist)" }
+            else {
+                $passBox.Text = "(set earlier: the accounts already exist)"
+                $forgotLink.Visible = $true
+            }
             if ($state.note) { $doneNote.Text = $state.note + " " + $doneNote.Text }
             $doneBox.Visible = $true
             if ($state.url) { Start-Process ($state.url + "setup") }
@@ -489,7 +526,7 @@ $installButton.Add_Click({
     [IO.File]::WriteAllText((Join-Path $Work "setup-in-machine.template"), $MachineScript)
     [IO.File]::WriteAllText($jobFile, $Job)
     if (Test-Path $LogFile) { Remove-Item $LogFile }
-    $state.read = 0; $state.url = $null; $state.password = $null; $state.runtime = $false; $state.badToken = $false; $state.note = $null; $state.step = 0
+    $state.read = 0; $state.url = $null; $state.password = $null; $state.runtime = $false; $state.badToken = $false; $state.note = $null; $state.mode = $null; $state.step = 0; $forgotLink.Visible = $false
     $logBox.Clear(); $bar.Value = 0; $doneBox.Visible = $false; $failBox.Visible = $false; $getDocker.Visible = $false
 
     $env:PORTAL_TOKEN = $token
@@ -530,7 +567,8 @@ Set-Layout "token"
 # Unattended (PORTAL_INSTALL_UNATTENDED=1): the same window runs on its own and
 # closes when it is done, for scripted installs and tests. PORTAL_INSTALL_FOLDER
 # shares a project folder, PORTAL_INSTALL_DIR picks the install folder, and
-# PORTAL_INSTALL_RESULT is a file that receives the outcome and the log.
+# PORTAL_INSTALL_RESULT is a file that receives the outcome and the log;
+# PORTAL_INSTALL_RESET=1 also asks for a new admin password when none was shown.
 $Unattended = $env:PORTAL_INSTALL_UNATTENDED -eq "1"
 if ($Unattended) {
     if ($env:PORTAL_INSTALL_FOLDER) { $folderRadio.Checked = $true; $folderBox.Text = $env:PORTAL_INSTALL_FOLDER }
