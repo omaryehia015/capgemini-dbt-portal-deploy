@@ -37,6 +37,8 @@ $LogFile = Join-Path $Work "install.log"
 $Job = @'
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# Setup's output is UTF-8 (checkmarks); read and write it as such, not the console code page.
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
 $repo = $env:PI_REPO
 $dir = $env:PI_DIR
 $env:PATH += ";$env:USERPROFILE\bin;C:\Program Files\RedHat\Podman;C:\Program Files\Docker\Docker\resources\bin"
@@ -128,6 +130,17 @@ function Test-PortBusy($p) {
 function Test-PortIsPortal($p) {
     try { return [bool](Invoke-RestMethod -TimeoutSec 3 "http://localhost:$p/api/version").api_version } catch { return $false }
 }
+# The folder shared with the portal, so a dbt project on this computer is linked by
+# typing its path in the Setup Assistant: the one chosen under More options, else
+# the system drive (C:\) when the install shares nothing yet; an install that
+# shares a folder already keeps it.
+if ($inMachine) {
+    $sharedLine = & podman machine ssh "grep -m1 '^DBT_PROJECTS_ROOT=' ~/dbt-portal/.env 2>/dev/null" 2>$null
+} else {
+    $sharedLine = Get-Content (Join-Path $dir ".env") -ErrorAction SilentlyContinue | Where-Object { $_ -match '^DBT_PROJECTS_ROOT=' } | Select-Object -First 1
+}
+$shareRoot = $env:PI_PROJECTS_ROOT
+if (-not $shareRoot -and -not ("$sharedLine" -match '^DBT_PROJECTS_ROOT=\S')) { $shareRoot = $env:SystemDrive + "\" }
 $current = $null
 if ($inMachine) {
     $line = & podman machine ssh "grep -m1 '^PORTAL_PORT=' ~/dbt-portal/.env 2>/dev/null" 2>$null
@@ -169,9 +182,9 @@ if ($inMachine) {
     $tokenFile = Join-Path $env:PI_WORK "token"
     [IO.File]::WriteAllText($tokenFile, [string]$env:PORTAL_TOKEN)
     $rootArg = ""; $display = ""
-    if ($env:PI_PROJECTS_ROOT) {
-        $rootArg = "--projects-root '" + (To-Machine $env:PI_PROJECTS_ROOT) + "'"
-        $display = ([IO.Path]::GetFullPath($env:PI_PROJECTS_ROOT)) -replace '\\', '/'
+    if ($shareRoot) {
+        $rootArg = "--projects-root '" + (To-Machine $shareRoot) + "'"
+        $display = ([IO.Path]::GetFullPath($shareRoot)) -replace '\\', '/'
     }
     $bash = [IO.File]::ReadAllText((Join-Path $env:PI_WORK "setup-in-machine.template"))
     $bash = $bash.Replace("__OLDENV__", $oldEnv).Replace("__KIT__", (To-Machine $kit)).Replace("__TOKEN__", (To-Machine $tokenFile))
@@ -186,7 +199,7 @@ if ($inMachine) {
 } else {
     # -Release latest: every run installs, or upgrades to, the kit's newest release.
     $setupArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $dir "setup.ps1"), "-NonInteractive", "-NoBrowser", "-Release", "latest")
-    if ($env:PI_PROJECTS_ROOT) { $setupArgs += @("-ProjectsRoot", $env:PI_PROJECTS_ROOT) }
+    if ($shareRoot) { $setupArgs += @("-ProjectsRoot", $shareRoot) }
     $setupArgs += @("-Port", $port)
     & powershell @setupArgs 2>&1 | ForEach-Object { Clean $_ }
     $code = $LASTEXITCODE

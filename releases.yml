@@ -16,8 +16,17 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     semantic service's contract (GET /api/version, cube_contract)
-latest: "2026.10.3"
+latest: "2026.10.4"
 releases:
+  "2026.10.4":
+    backend: "1.1.2"
+    frontend: "1.1.1"
+    cube: "1.0.1"
+    notes: >-
+      The dbt project from a container image, on this computer or in a
+      registry (Setup Assistant, Docker image). The setup app shares the
+      computer's main drive with the portal, so a project folder is linked by
+      typing its path, with no commands.
   "2026.10.3":
     backend: "1.1.1"
     frontend: "1.1.0"

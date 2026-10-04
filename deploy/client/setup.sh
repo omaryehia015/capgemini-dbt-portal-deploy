@@ -160,20 +160,33 @@ fi
 
 # Where profiles.yml is: in the project (seen as /workspace), or ~/.dbt.
 rm -f compose.override.yaml
+profiles_mount=""
 if [[ -n "$GIT_MODE" ]]; then :
 elif [[ -f "$PROJECT/profiles.yml" ]]; then :
 elif [[ -f "$PROJECT/profiles/profiles.yml" ]]; then set_env DBT_PROFILES_DIR /workspace/profiles
 elif [[ -f "$HOME/.dbt/profiles.yml" ]]; then
     set_env DBT_PROFILES_DIR /profiles
+    profiles_mount="$HOME/.dbt:/profiles:ro"
+else warn "No profiles.yml found in the project or ~/.dbt."; fi
+# Rootless Podman: its socket lets the Setup Assistant use a dbt project image
+# that is on this computer (it reaches only this user's own containers).
+engine_mount=""
+sock="/run/user/$(id -u)/podman/podman.sock"
+if [[ "$E" == podman && -S "$sock" ]]; then engine_mount="$sock:/run/engine.sock"; fi
+if [[ -n "$profiles_mount$engine_mount" ]]; then
     {
-        echo "# Written by setup.sh: profiles.yml comes from ~/.dbt on this machine."
+        echo "# Written by setup.sh for this machine."
         echo "services:"
         for svc in execution worker insights semantic; do
+            mounts=()
+            [[ -n "$profiles_mount" ]] && mounts+=("\"$profiles_mount\"")
+            [[ "$svc" == execution && -n "$engine_mount" ]] && mounts+=("\"$engine_mount\"")
+            [[ ${#mounts[@]} -gt 0 ]] || continue
             echo "  $svc:"
-            echo "    volumes: [\"$HOME/.dbt:/profiles:ro\"]"
+            echo "    volumes: [$(IFS=,; echo "${mounts[*]}")]"
         done
     } > compose.override.yaml
-else warn "No profiles.yml found in the project or ~/.dbt."; fi
+fi
 # Bind mounts on macOS / rootless Podman: root inside the container, so `dbt deps` can write.
 [[ ( -z "$GIT_MODE" || -n "$PROJECTS_ROOT" ) && ( "$(uname -s)" == Darwin || "$E" == podman ) ]] && set_env PORTAL_USER 0:0
 
