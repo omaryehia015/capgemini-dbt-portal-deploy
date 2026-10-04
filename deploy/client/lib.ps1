@@ -53,16 +53,23 @@ function Test-Host($path) {
     return (-not $blocked)
 }
 
+# .env is UTF-8. Windows PowerShell's Get-Content reads the ANSI code page, and
+# writing that back as UTF-8 grew every non-ASCII character on each write.
+function Read-EnvLines($file) {
+    if (-not (Test-Path $file)) { return @() }
+    return @([IO.File]::ReadAllLines($file, (New-Object Text.UTF8Encoding $false)))
+}
+
 function Get-Env($key) {
     $file = Join-Path $Root ".env"
     if (-not (Test-Path $file)) { return "" }
-    $line = Get-Content $file | Where-Object { $_ -match "^$key=" } | Select-Object -First 1
+    $line = Read-EnvLines $file | Where-Object { $_ -match "^$key=" } | Select-Object -First 1
     if ($line) { return $line.Substring($key.Length + 1) } else { return "" }
 }
 
 function Set-Env($key, $value) {
     $file = Join-Path $Root ".env"
-    $lines = @(); if (Test-Path $file) { $lines = @(Get-Content $file) }
+    $lines = Read-EnvLines $file
     $found = $false
     $lines = $lines | ForEach-Object { if ($_ -match "^$key=") { $found = $true; "$key=$value" } else { $_ } }
     if (-not $found) { $lines += "$key=$value" }

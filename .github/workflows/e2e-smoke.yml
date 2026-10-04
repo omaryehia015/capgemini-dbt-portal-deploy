@@ -102,6 +102,21 @@ jobs:
             for k in JWT_SECRET CUBE_API_SECRET POSTGRES_PASSWORD REDIS_PASSWORD; do echo "$k=$(openssl rand -hex 24)"; done
           } > .env
 
+      # "denied" here means this workflow cannot read the private images: add a
+      # GHCR_READ_TOKEN secret (classic token, read:packages), or give this repo
+      # read access in each package's settings (Manage Actions access).
+      - name: Pull the images
+        run: |
+          docker compose -f "${{ matrix.stack }}" pull 2>&1 | tee pull.log   # pipefail: fails with the pull
+        shell: bash
+
+      - name: Explain a denied pull
+        if: failure() && hashFiles('pull.log') != ''
+        run: |
+          if grep -q denied pull.log; then
+            echo "::error::GHCR denied the pull. Add a GHCR_READ_TOKEN secret to this repo (classic token with read:packages), or add this repo under Manage Actions access in each capgemini-dbt-portal-* package's settings."
+          fi
+
       - name: Start the stack
         run: docker compose -f "${{ matrix.stack }}" up -d --wait --wait-timeout 600
 

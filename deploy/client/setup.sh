@@ -18,7 +18,8 @@
 # Warehouse credentials stay in the project's own .env.
 #
 # Private images: export PORTAL_TOKEN (a read-only registry token, with
-# PORTAL_USER_NAME if it is not "portal") and the script signs in for you.
+# PORTAL_USER_NAME to override the user name the token belongs to) and the
+# script signs in for you.
 #
 # An answers file is KEY=VALUE lines: PROJECT, PORT, RELEASE and WORKERS set
 # the options above; any other key (AIRFLOW_URL, AIRBYTE_MODE=off, ...) is
@@ -52,7 +53,7 @@ while [[ $# -gt 0 ]]; do
         --skip-pull) SKIP_PULL=1; shift ;;
         --check) CHECK_ONLY=1; shift ;;
         --no-browser) NO_BROWSER=1; shift ;;
-        -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
         *) PROJECT="$1"; shift ;;
     esac
 done
@@ -163,26 +164,46 @@ else warn "No profiles.yml found in the project or ~/.dbt."; fi
 [[ ( -z "$GIT_MODE" || -n "$PROJECTS_ROOT" ) && ( "$(uname -s)" == Darwin || "$E" == podman ) ]] && set_env PORTAL_USER 0:0
 
 # -- 4. Pull and start ---------------------------------------------------------
+# GHCR accepts a token only with the GitHub name of its owner: ask GitHub whose it is.
+registry_user() {  # registry_user TOKEN
+    local login=""
+    if [[ -n "${PORTAL_USER_NAME:-}" ]]; then echo "$PORTAL_USER_NAME"; return; fi
+    login="$(curl -fsS --max-time 15 -H "Authorization: Bearer $1" https://api.github.com/user 2>/dev/null \
+        | sed -n 's/^ *"login": *"\([^"]*\)".*/\1/p' | head -1)" || true
+    echo "${login:-portal}"
+}
 registry_login() {  # registry_login USER TOKEN
     local registry; registry="$(get_env IMAGE_REGISTRY)"; registry="${registry:-ghcr.io/omaryehia015}"
     printf '%s' "$2" | "$E" login "${registry%%/*}" -u "$1" --password-stdin >/dev/null 2>&1 \
         || fail "The registry did not accept that token."
     ok "Signed in to ${registry%%/*}"
 }
+# Podman with an external compose provider (docker-compose) pulls without the
+# login podman keeps, so podman pulls the images itself and compose finds them.
+pull_images() {
+    local images image
+    if [[ "$E" == podman ]]; then
+        images="$("${C[@]}" config --images 2>/dev/null | grep -v '^>>>>' | sort -u)" || true
+        if [[ -n "$images" ]]; then
+            for image in $images; do echo "  $image"; podman pull "$image" || return 1; done
+            return 0
+        fi
+    fi
+    "${C[@]}" pull
+}
 if [[ -z "$SKIP_PULL" ]]; then
     if [[ -n "${PORTAL_TOKEN:-}" ]]; then
         say "Signing in to the image registry"
-        registry_login "${PORTAL_USER_NAME:-portal}" "$PORTAL_TOKEN"
+        registry_login "$(registry_user "$PORTAL_TOKEN")" "$PORTAL_TOKEN"
     fi
     say "Downloading the portal images (a few minutes the first time)"
-    if ! "${C[@]}" pull; then
+    if ! pull_images; then
         [[ -z "$NON_INTERACTIVE" ]] || fail "Pulling the images failed. Set PORTAL_TOKEN, or sign in first: $E login ghcr.io"
         echo
         echo "The images are private. Paste the access token you were sent."
-        read -rp "Registry username [portal]: " user
         read -rsp "Token (hidden): " token && echo
-        registry_login "${user:-portal}" "$token"
-        "${C[@]}" pull
+        registry_login "$(registry_user "$token")" "$token"
+        pull_images || fail "Pulling the images failed with that token."
     fi
 fi
 say "Starting (this takes a minute on first start: databases, migrations)"

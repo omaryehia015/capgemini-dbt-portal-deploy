@@ -8,7 +8,8 @@
 #     setup.sh  setup.ps1  manage.sh  manage.ps1  lib.sh  lib.ps1
 #     install.sh  install.ps1  portal.answers.example  README.md
 #
-# Attached to a GitHub release named portal-<release> in this repo.
+# Attached to a GitHub release named portal-<release> in this repo, with the
+# Windows installer (Install-DbtPortal.cmd: double-click, a window does the rest).
 name: Client Kit
 
 on:
@@ -69,7 +70,7 @@ jobs:
           import yaml; x = yaml.safe_load(open('releases.yml'))['releases']['$RELEASE']
           print(f\"backend {x['backend']}, frontend {x['frontend']}, cube {x['cube']}\n\n{x.get('notes', '')}\")")
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$ZIP" --clobber
+            gh release upload "$tag" "$ZIP" deploy/client/download/Install-DbtPortal.cmd --clobber
           else
-            gh release create "$tag" "$ZIP" --title "Portal $RELEASE" --notes "$notes"
+            gh release create "$tag" "$ZIP" deploy/client/download/Install-DbtPortal.cmd --title "Portal $RELEASE" --notes "$notes"
           fi

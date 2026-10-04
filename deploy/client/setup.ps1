@@ -20,7 +20,8 @@
 # the options above; any other key (AIRFLOW_URL, AIRBYTE_MODE=off, ...) is
 # written to .env. See portal.answers.example.
 # Private images: set $env:PORTAL_TOKEN (a read-only registry token, with
-# $env:PORTAL_USER_NAME if it is not "portal") and the script signs in for you.
+# $env:PORTAL_USER_NAME to override the user name the token belongs to) and the
+# script signs in for you.
 # If Windows blocks the script: powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Project ...
 [CmdletBinding()]
 param(
@@ -52,7 +53,7 @@ $extraEnv = [ordered]@{}
 if ($Answers) {
     $NonInteractive = $true
     if (-not (Test-Path $Answers)) { Fail "Answers file '$Answers' not found." }
-    foreach ($raw in Get-Content $Answers) {
+    foreach ($raw in Get-Content $Answers -Encoding UTF8) {
         $line = ($raw -replace '#.*$', '').Trim()
         if ($line -notmatch '^([^=]+)=(.*)$') { continue }
         $key = $Matches[1].Trim(); $value = $Matches[2].Trim()
@@ -137,7 +138,7 @@ if ($extraEnv.Count) { Say "Applied $($extraEnv.Count) setting(s) from $Answers"
 if (-not $GitMode -or $ProjectsRoot) { Set-Env PORTAL_USER "0:0" }
 
 if ($Release) {
-    $text = Get-Content releases.yml -Raw
+    $text = Get-Content releases.yml -Raw -Encoding UTF8
     if ($Release -eq "latest") { $Release = ([regex]::Match($text, '(?m)^latest:\s*"?([^"\r\n]+)"?')).Groups[1].Value }
     $block = [regex]::Match($text, '(?ms)^  "' + [regex]::Escape($Release) + '":\s*\r?\n(.*?)(?=^  "|\z)')
     if (-not $block.Success) { Fail "Release '$Release' is not in releases.yml." }
@@ -165,31 +166,53 @@ if (-not $GitMode) {
 }
 
 # -- 4. Pull and start ---------------------------------------------------------
+# GHCR accepts a token only with the GitHub name of its owner: ask GitHub whose it is.
+function Get-RegistryUser($plain) {
+    if ($env:PORTAL_USER_NAME) { return $env:PORTAL_USER_NAME }
+    try {
+        $me = Invoke-RestMethod -Headers @{ Authorization = "Bearer $plain" } -TimeoutSec 15 "https://api.github.com/user"
+        if ($me.login) { return $me.login }
+    } catch { }
+    return "portal"
+}
 function Sign-In($user, $plain) {
     $registry = if (Get-Env IMAGE_REGISTRY) { Get-Env IMAGE_REGISTRY } else { "ghcr.io/omaryehia015" }
     $plain | & $E login ($registry -split '/')[0] -u $user --password-stdin *> $null
     if ($LASTEXITCODE -ne 0) { Fail "The registry did not accept that token." }
     Ok "Signed in to $(($registry -split '/')[0])"
 }
+# Podman with an external compose provider (docker-compose) pulls without the
+# login podman keeps, so podman pulls the images itself and compose finds them.
+function Pull-Images {
+    if ($E -eq "podman") {
+        $images = & $E compose config --images 2>$null | Where-Object { $_ -and $_ -notmatch '^>>>>' } | Sort-Object -Unique
+        if ($images) {
+            foreach ($image in $images) {
+                Write-Host "  $image"
+                & $E pull $image | Out-Host
+                if ($LASTEXITCODE -ne 0) { return $false }
+            }
+            return $true
+        }
+    }
+    & $E compose pull | Out-Host
+    return ($LASTEXITCODE -eq 0)
+}
 if (-not $SkipPull) {
     $ErrorActionPreference = "Continue"
     if ($env:PORTAL_TOKEN) {
         Say "Signing in to the image registry"
-        $tokenUser = if ($env:PORTAL_USER_NAME) { $env:PORTAL_USER_NAME } else { "portal" }
-        Sign-In $tokenUser $env:PORTAL_TOKEN
+        Sign-In (Get-RegistryUser $env:PORTAL_TOKEN) $env:PORTAL_TOKEN
     }
     Say "Downloading the portal images (a few minutes the first time)"
-    & $E compose pull
-    if ($LASTEXITCODE -ne 0) {
+    if (-not (Pull-Images)) {
         if ($NonInteractive) { Fail "Pulling the images failed. Set PORTAL_TOKEN, or sign in first: $E login ghcr.io" }
         Write-Host ""
         Write-Host "The images are private. Paste the access token you were sent."
-        $user = Read-Host "Registry username [portal]"
-        if (-not $user) { $user = "portal" }
         $token = Read-Host "Token" -AsSecureString
         $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($token))
-        Sign-In $user $plain
-        Compose pull
+        Sign-In (Get-RegistryUser $plain) $plain
+        if (-not (Pull-Images)) { Fail "Pulling the images failed with that token." }
     }
     $ErrorActionPreference = "Stop"
 }

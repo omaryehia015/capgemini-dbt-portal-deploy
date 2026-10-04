@@ -20,132 +20,138 @@
   h1 { font-size: 28px; margin: 0 0 6px; }
   .lead { color: var(--muted); margin: 0 0 28px; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; margin-bottom: 18px; }
-  .step { display: flex; gap: 14px; }
-  .num { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--primary); color: #fff;
-         display: grid; place-items: center; font-weight: 700; font-size: 14px; }
-  .step h2 { font-size: 16px; margin: 3px 0 4px; }
-  .step p { margin: 0 0 12px; color: var(--muted); }
-  .tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 12px; }
+  .card h2 { font-size: 17px; margin: 0 0 4px; }
+  .card p { margin: 0 0 12px; color: var(--muted); }
+  .tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 18px; }
   .tabs button { background: none; border: 0; padding: 7px 16px; font: inherit; color: var(--muted); cursor: pointer; }
   .tabs button[aria-selected="true"] { background: var(--accent-bg); color: var(--primary); font-weight: 600; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
   input[type=password], input[type=text] { width: 100%; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border);
          background: var(--bg); color: var(--text); font: inherit; }
-  input:focus, button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+  input:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
   pre { background: var(--code-bg); color: var(--code-text); border-radius: 10px; padding: 14px 16px; margin: 12px 0 0;
         overflow-x: auto; font: 13px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
-  .actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
-  .btn { background: var(--primary); color: #fff; border: 0; border-radius: 9px; padding: 9px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+  .btn { display: inline-block; background: var(--primary); color: #fff; border: 0; border-radius: 10px; padding: 11px 22px;
+         font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
   .btn:hover { background: var(--primary-hover); }
+  .btn.secondary { background: none; color: var(--primary); border: 1px solid var(--border); padding: 9px 16px; }
   .ok { color: var(--ok); font-size: 13px; font-weight: 600; }
+  ol.steps { margin: 16px 0 0; padding-left: 20px; color: var(--muted); }
+  ol.steps li { margin-bottom: 6px; }
   ul { margin: 0; padding-left: 20px; color: var(--muted); }
-  details summary { cursor: pointer; font-weight: 600; }
+  details { margin-top: 16px; }
+  details summary { cursor: pointer; font-weight: 600; font-size: 14px; }
   .small { font-size: 13px; color: var(--muted); }
 </style>
 </head>
 <body>
 <main>
   <h1>Install the dbt Portal</h1>
-  <p class="lead">One command. About five minutes. The portal opens in your browser and walks you through the rest.</p>
+  <p class="lead">Download, double-click, done. About five minutes, and the portal opens in your browser.</p>
+
+  <div class="tabs" role="tablist" aria-label="Operating system">
+    <button role="tab" id="tab-win" aria-selected="true">Windows</button>
+    <button role="tab" id="tab-unix" aria-selected="false">macOS / Linux</button>
+  </div>
 
   <section class="card">
-    <div class="step"><div class="num">1</div><div style="flex:1;min-width:0">
-      <h2>Have these ready</h2>
-      <ul>
-        <li><strong>Docker Desktop</strong> (or Podman) installed and running. Nothing else: no Python, Node or dbt.</li>
-        <li>The <strong>access token</strong> you were sent. It only lets this machine download the portal.</li>
-      </ul>
-    </div></div>
+    <h2>Before you start</h2>
+    <ul>
+      <li><strong>Docker Desktop</strong> (or Podman) installed. The installer starts it if it is not running.</li>
+      <li>The <strong>access token</strong> you were sent. It only lets this computer download the portal.</li>
+    </ul>
+  </section>
+
+  <section class="card" id="win">
+    <h2>Windows</h2>
+    <p>Paste your token here and the installer you download already has it. Or leave it empty and paste it in the installer.</p>
+    <label for="token">Access token (optional here)</label>
+    <input id="token" type="password" autocomplete="off" placeholder="paste the token you were sent">
+    <div class="hint">The token stays on this computer: it is written into the file you download, never sent anywhere.</div>
+    <div class="actions">
+      <button class="btn" id="download">Download the installer</button>
+      <span class="ok" id="downloaded" hidden>Downloaded</span>
+    </div>
+    <ol class="steps">
+      <li>Open <strong>Install-DbtPortal.cmd</strong> from your downloads.</li>
+      <li>If Windows says it protected your PC, click <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
+      <li>Choose where your dbt project is (a Git repository, or a folder on this computer) and click <strong>Install</strong>.</li>
+    </ol>
+    <p class="small" style="margin-top:12px">The window shows each step, then opens the portal and gives you the admin password. A <strong>dbt Portal</strong> shortcut is added to your desktop.</p>
+  </section>
+
+  <section class="card" id="unix" hidden>
+    <h2>macOS / Linux</h2>
+    <p>Open a terminal, paste this, press Enter. It asks the rest.</p>
+    <label for="token-unix">Access token</label>
+    <input id="token-unix" type="password" autocomplete="off" placeholder="paste the token you were sent">
+    <pre id="cmd" aria-live="polite"></pre>
+    <div class="actions">
+      <button class="btn" id="copy">Copy command</button>
+      <span class="ok" id="copied" hidden>Copied</span>
+    </div>
   </section>
 
   <section class="card">
-    <div class="step"><div class="num">2</div><div style="flex:1;min-width:0">
-      <h2>Paste your token, copy the command</h2>
-      <p>The token stays in this page: it is only put into the command below, never sent anywhere.</p>
-
-      <div class="tabs" role="tablist" aria-label="Operating system">
-        <button role="tab" id="tab-win" aria-selected="true">Windows</button>
-        <button role="tab" id="tab-unix" aria-selected="false">macOS / Linux</button>
-      </div>
-
-      <label for="token">Access token</label>
-      <input id="token" type="password" autocomplete="off" placeholder="paste the token you were sent">
-
-      <details style="margin-top:12px">
-        <summary>My dbt project is a folder on this machine (optional)</summary>
-        <label for="project">Path to the folder with dbt_project.yml</label>
-        <input id="project" type="text" placeholder="C:\work\my-dbt-project">
-        <div class="hint">Leave empty to connect a Git repository inside the portal instead (recommended).</div>
-      </details>
-
-      <pre id="cmd" aria-live="polite"></pre>
-      <div class="actions">
-        <button class="btn" id="copy">Copy command</button>
-        <span class="ok" id="copied" hidden>Copied</span>
-      </div>
-      <p class="small" style="margin-top:12px">
-        <span id="where-win">Open <strong>PowerShell</strong>, paste, press Enter.</span>
-        <span id="where-unix" hidden>Open a <strong>terminal</strong>, paste, press Enter.</span>
-      </p>
-    </div></div>
+    <h2>Then the portal guides you</h2>
+    <p style="margin:0">The <strong>Setup Assistant</strong> takes over in the browser: your dbt project (Git or a folder), the variables it needs, the warehouse connection, packages, reports and your team.</p>
   </section>
 
-  <section class="card">
-    <div class="step"><div class="num">3</div><div style="flex:1;min-width:0">
-      <h2>Then it happens on its own</h2>
-      <ul>
-        <li>Checks your machine and signs in to the image registry with your token.</li>
-        <li>Downloads and starts the portal, then opens it in your browser.</li>
-        <li>The <strong>Setup Assistant</strong> takes over: workspace name, warehouse connection, your dbt project (Git or a folder), packages, reports and your team.</li>
-      </ul>
-    </div></div>
-  </section>
-
-  <p class="small">Trouble? Run <code>.\manage.ps1 doctor</code> (Windows) or <code>./manage.sh doctor</code> in the install folder, <code>~/dbt-portal</code> by default.</p>
+  <p class="small">Running the installer again later upgrades the portal; accounts and history are kept.</p>
 </main>
 
 <script>
 (function () {
   var RAW = "https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/";
-  var os = /Win/i.test(navigator.platform || navigator.userAgent) ? "win" : "unix";
+  var INSTALLER = "Install-DbtPortal.cmd";
   var $ = function (id) { return document.getElementById(id); };
+  var os = /Win/i.test(navigator.platform || navigator.userAgent) ? "win" : "unix";
 
-  function shq(v) { return "'" + v.replace(/'/g, "'\\''") + "'"; }       // POSIX single quote
-  function psq(v) { return "'" + v.replace(/'/g, "''") + "'"; }           // PowerShell single quote
-
-  function command() {
-    var token = $("token").value.trim() || "<paste your token>";
-    var project = $("project").value.trim();
-    if (os === "win") {
-      var lines = ["$env:PORTAL_TOKEN = " + psq(token)];
-      if (project) lines.push("$env:PORTAL_PROJECT = " + psq(project));
-      lines.push("irm -Headers @{ Authorization = \"Bearer $env:PORTAL_TOKEN\" } " + RAW + "install.ps1 | iex");
-      return lines.join("\n");
-    }
-    var tail = project ? "bash -s -- " + shq(project) : "bash";
-    return "curl -fsSL -H " + shq("Authorization: Bearer " + token) + " " + RAW + "install.sh \\\n  | PORTAL_TOKEN=" + shq(token) + " " + tail;
-  }
+  function shq(v) { return "'" + v.replace(/'/g, "'\\''") + "'"; }
+  function psq(v) { return v.replace(/'/g, "''"); }
 
   function render() {
-    $("cmd").textContent = command();
     $("tab-win").setAttribute("aria-selected", os === "win");
     $("tab-unix").setAttribute("aria-selected", os === "unix");
-    $("where-win").hidden = os !== "win";
-    $("where-unix").hidden = os !== "unix";
-    $("project").placeholder = os === "win" ? "C:\\work\\my-dbt-project" : "~/work/my-dbt-project";
+    $("win").hidden = os !== "win";
+    $("unix").hidden = os !== "unix";
+    var token = $("token-unix").value.trim() || "<paste your token>";
+    $("cmd").textContent = "curl -fsSL -H " + shq("Authorization: Bearer " + token) + " " + RAW + "install.sh \\\n  | PORTAL_TOKEN=" + shq(token) + " bash";
     $("copied").hidden = true;
   }
 
+  function save(name, text) {
+    var url = URL.createObjectURL(new Blob([text], { type: "application/octet-stream" }));
+    var a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  $("download").onclick = function () {
+    var token = $("token").value.trim();
+    var done = function () { $("downloaded").hidden = false; };
+    if (!token) { location.href = INSTALLER; done(); return; }
+    // The installer has a placeholder for the token: fill it in this browser.
+    fetch(INSTALLER).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.text();
+    }).then(function (text) {
+      save(INSTALLER, text.replace("'__PORTAL_TOKEN__'", "'" + psq(token) + "'"));
+      done();
+    }).catch(function () { location.href = INSTALLER; done(); });
+  };
+
   $("tab-win").onclick = function () { os = "win"; render(); };
   $("tab-unix").onclick = function () { os = "unix"; render(); };
-  $("token").oninput = render;
-  $("project").oninput = render;
+  $("token-unix").oninput = render;
   $("copy").onclick = function () {
-    var text = command();
+    var text = $("cmd").textContent;
     var done = function () { $("copied").hidden = false; };
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
-    else { var r = document.createRange(); r.selectNodeContents($("cmd")); getSelection().removeAllRanges(); getSelection().addRange(r); done(); }
+    else done();
   };
   render();
 })();

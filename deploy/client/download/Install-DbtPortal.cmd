@@ -1,0 +1,437 @@
+<# : Windows installer for the dbt Portal. Double-click to run.
+@echo off
+setlocal
+set "PORTAL_INSTALLER=%~f0"
+start "" powershell -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -Command "& ([scriptblock]::Create([IO.File]::ReadAllText($env:PORTAL_INSTALLER)))"
+exit /b
+#>
+# ------------------------------------------------------------------------------
+# A window that installs and starts the dbt Portal: no commands to type.
+#
+# The batch lines above hand this file to PowerShell. Everything below is
+# PowerShell: a small Windows Forms wizard that asks for the access token and
+# where the dbt project is, then runs the client kit's setup.ps1 in the
+# background and shows its progress. It needs Docker Desktop or Podman, and
+# starts them when they are installed but not running.
+#
+# The download page can hand out a copy with the token filled in (the line
+# below); otherwise the person pastes it in the window.
+# ------------------------------------------------------------------------------
+$PrefilledToken = '__PORTAL_TOKEN__'
+
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+[Windows.Forms.Application]::EnableVisualStyles()
+
+$Repo = "omaryehia015/capgemini-dbt-portal-deploy"
+$DefaultDir = Join-Path $env:USERPROFILE "dbt-portal"
+$Work = Join-Path ([IO.Path]::GetTempPath()) ("dbt-portal-install-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+New-Item -ItemType Directory $Work | Out-Null
+$LogFile = Join-Path $Work "install.log"
+
+# -- The background job: runs in its own PowerShell, writes to $LogFile -------
+# Lines starting with "##STEP n " move the progress bar; "##NEEDS_RUNTIME"
+# means neither Docker nor Podman is installed.
+$Job = @'
+$ErrorActionPreference = "Stop"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$repo = $env:PI_REPO
+$dir = $env:PI_DIR
+$token = $env:PORTAL_TOKEN
+$env:PATH += ";$env:USERPROFILE\bin;C:\Program Files\RedHat\Podman;C:\Program Files\Docker\Docker\resources\bin"
+function Step($n, $text) { Write-Output "##STEP $n $text" }
+function Quiet($exe) { $ErrorActionPreference = "Continue"; & $exe @args *> $null; return ($LASTEXITCODE -eq 0) }
+
+# 1. Docker or Podman, running
+Step 1 "Checking Docker or Podman"
+function Running {
+    foreach ($e in "docker", "podman") {
+        if ((Get-Command $e -ErrorAction SilentlyContinue) -and (Quiet $e info) -and (Quiet $e compose version)) { return $e }
+    }
+    return $null
+}
+$engine = Running
+if (-not $engine) {
+    $desktop = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    if (Test-Path $desktop) {
+        Write-Output "Starting Docker Desktop (this can take a minute)..."
+        Start-Process $desktop
+    } elseif (Get-Command podman -ErrorAction SilentlyContinue) {
+        Write-Output "Starting the Podman machine..."
+        Quiet podman machine start | Out-Null
+    } else {
+        Write-Output "##NEEDS_RUNTIME"
+        exit 3
+    }
+    for ($i = 0; $i -lt 60 -and -not $engine; $i++) { Start-Sleep -Seconds 5; $engine = Running }
+    if (-not $engine) { Write-Output "Docker or Podman did not start. Start it, then click Try again."; exit 4 }
+}
+Write-Output "Using $engine"
+
+# 2. The client kit: a release's kit, the newest files (PORTAL_CHANNEL=main),
+#    or one already here (PORTAL_KIT_DIR)
+Step 2 "Downloading the portal"
+$headers = @{}
+if ($token) { $headers["Authorization"] = "Bearer $token" }
+$tmp = Join-Path $env:PI_WORK "kit"
+New-Item -ItemType Directory $tmp -Force | Out-Null
+$zip = Join-Path $tmp "kit.zip"
+if ($env:PORTAL_KIT_DIR) {
+    # A kit already on this computer (offline installs, or testing a new kit).
+    $kit = $env:PORTAL_KIT_DIR
+    Write-Output "Using the kit in $kit"
+} elseif ($env:PORTAL_CHANNEL -eq "main") {
+    Invoke-WebRequest -UseBasicParsing -Headers $headers -OutFile $zip "https://api.github.com/repos/$repo/zipball/main"
+    Expand-Archive $zip -DestinationPath $tmp -Force
+    $src = Get-ChildItem $tmp -Directory | Where-Object { Test-Path (Join-Path $_.FullName "compose.yaml") } | Select-Object -First 1
+    $kit = Join-Path $tmp "assembled"
+    New-Item -ItemType Directory (Join-Path $kit "postgres") -Force | Out-Null
+    foreach ($f in "compose.yaml", "compose.single.yaml", ".env.example", "releases.yml") { Copy-Item (Join-Path $src.FullName $f) $kit }
+    Copy-Item (Join-Path $src.FullName "postgres\init-databases.sql") (Join-Path $kit "postgres")
+    foreach ($f in "setup.sh", "setup.ps1", "manage.sh", "manage.ps1", "lib.sh", "lib.ps1", "install.sh", "install.ps1", "portal.answers.example", "README.md") {
+        Copy-Item (Join-Path $src.FullName "deploy\client\$f") $kit
+    }
+} else {
+    $text = (Invoke-WebRequest -UseBasicParsing -Headers $headers "https://raw.githubusercontent.com/$repo/main/releases.yml").Content
+    $release = ([regex]::Match($text, '(?m)^latest:\s*"?([^"\r\n]+)"?')).Groups[1].Value
+    if (-not $release) { throw "Could not work out the latest release." }
+    $name = "dbt-portal-client-kit-$release"
+    if ($token) {
+        $rel = Invoke-RestMethod -Headers $headers "https://api.github.com/repos/$repo/releases/tags/portal-$release"
+        $asset = $rel.assets | Where-Object { $_.name -eq "$name.zip" } | Select-Object -First 1
+        if (-not $asset) { throw "Release portal-$release has no client kit." }
+        Invoke-WebRequest -UseBasicParsing -Headers ($headers + @{ Accept = "application/octet-stream" }) -OutFile $zip $asset.url
+    } else {
+        Invoke-WebRequest -UseBasicParsing -OutFile $zip "https://github.com/$repo/releases/download/portal-$release/$name.zip"
+    }
+    Expand-Archive $zip -DestinationPath $tmp -Force
+    $kit = Join-Path $tmp $name
+    Write-Output "Release $release"
+}
+New-Item -ItemType Directory $dir -Force | Out-Null
+# An existing install keeps its .env (secrets, settings): upgrading keeps accounts.
+Get-ChildItem $kit -Force | Where-Object { $_.Name -ne ".env" } | Copy-Item -Destination $dir -Recurse -Force
+
+# 3. Install and start
+Step 3 "Starting the portal (a few minutes the first time)"
+$setupArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $dir "setup.ps1"), "-NonInteractive", "-NoBrowser")
+if ($env:PI_PROJECTS_ROOT) { $setupArgs += @("-ProjectsRoot", $env:PI_PROJECTS_ROOT) }
+# A fresh install takes the first free port from 8080.
+if (-not (Test-Path (Join-Path $dir ".env")) -or -not (Select-String -Path (Join-Path $dir ".env") -Pattern '^PORTAL_PORT=\d' -Quiet)) {
+    $port = 8080
+    while ($port -lt 8100) {
+        $l = $null
+        try { $l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port); $l.Start(); $l.Stop(); break } catch { $port++ }
+    }
+    $setupArgs += @("-Port", $port)
+}
+$ErrorActionPreference = "Continue"
+& powershell @setupArgs 2>&1 | ForEach-Object {
+    $line = if ($_ -is [Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+    # Colour codes and the empty error records native tools leave behind.
+    $line = $line -replace "\x1b\[[0-9;]*m", ""
+    if ($line -ne "System.Management.Automation.RemoteException") { $line }
+}
+$code = $LASTEXITCODE
+if ($code -ne 0) { exit $code }
+
+# 4. Shortcuts: the portal opens like any other app
+Step 4 "Adding shortcuts"
+$envText = Get-Content (Join-Path $dir ".env") -Raw
+$port = ([regex]::Match($envText, '(?m)^PORTAL_PORT=(\d+)')).Groups[1].Value
+if (-not $port) { $port = "8080" }
+$url = "http://localhost:$port/"
+$shortcut = "[InternetShortcut]`r`nURL=$url`r`n"
+foreach ($folder in [Environment]::GetFolderPath("Desktop"), (Join-Path ([Environment]::GetFolderPath("Programs")) "")) {
+    try { [IO.File]::WriteAllText((Join-Path $folder "dbt Portal.url"), $shortcut) } catch { }
+}
+Write-Output "##URL $url"
+exit 0
+'@
+
+# -- The window ---------------------------------------------------------------
+$blue = [Drawing.Color]::FromArgb(0, 112, 173)
+$muted = [Drawing.Color]::FromArgb(91, 107, 120)
+$font = New-Object Drawing.Font("Segoe UI", 10)
+
+$form = New-Object Windows.Forms.Form
+$form.Text = "dbt Portal setup"
+$form.ClientSize = New-Object Drawing.Size(560, 560)
+$form.StartPosition = "CenterScreen"
+$form.FormBorderStyle = "FixedDialog"
+$form.MaximizeBox = $false
+$form.Font = $font
+$form.BackColor = [Drawing.Color]::White
+
+function New-Label($text, $x, $y, $w, $h, $size = 10, $bold = $false, $color = $null) {
+    $l = New-Object Windows.Forms.Label
+    $l.Text = $text
+    $l.Location = New-Object Drawing.Point($x, $y)
+    $l.Size = New-Object Drawing.Size($w, $h)
+    $style = if ($bold) { [Drawing.FontStyle]::Bold } else { [Drawing.FontStyle]::Regular }
+    $l.Font = New-Object Drawing.Font("Segoe UI", $size, $style)
+    if ($color) { $l.ForeColor = $color }
+    return $l
+}
+
+$header = New-Object Windows.Forms.Panel
+$header.Dock = "Top"
+$header.Height = 78
+$header.BackColor = $blue
+$title = New-Label "dbt Portal" 24 12 500 32 16 $true ([Drawing.Color]::White)
+$sub = New-Label "Installs the portal on this computer. About five minutes." 24 44 520 22 10 $false ([Drawing.Color]::White)
+$header.Controls.AddRange(@($title, $sub))
+$form.Controls.Add($header)
+
+# Page 1: the questions
+$ask = New-Object Windows.Forms.Panel
+$ask.Location = New-Object Drawing.Point(0, 78)
+$ask.Size = New-Object Drawing.Size(560, 482)
+
+$ask.Controls.Add((New-Label "Access token" 24 18 300 20 10 $true))
+$ask.Controls.Add((New-Label "The token you were sent. It only lets this computer download the portal." 24 40 510 20 9 $false $muted))
+$tokenBox = New-Object Windows.Forms.TextBox
+$tokenBox.Location = New-Object Drawing.Point(24, 64)
+$tokenBox.Size = New-Object Drawing.Size(510, 26)
+$tokenBox.UseSystemPasswordChar = $true
+if ($PrefilledToken -and $PrefilledToken -notlike "__*__") { $tokenBox.Text = $PrefilledToken }
+elseif ($env:PORTAL_TOKEN) { $tokenBox.Text = $env:PORTAL_TOKEN }
+$ask.Controls.Add($tokenBox)
+
+$ask.Controls.Add((New-Label "Your dbt project" 24 108 300 20 10 $true))
+$gitRadio = New-Object Windows.Forms.RadioButton
+$gitRadio.Text = "In a Git repository: connect it in the portal (recommended)"
+$gitRadio.Location = New-Object Drawing.Point(24, 132)
+$gitRadio.Size = New-Object Drawing.Size(510, 24)
+$gitRadio.Checked = $true
+$folderRadio = New-Object Windows.Forms.RadioButton
+$folderRadio.Text = "In a folder on this computer: pick the project in the portal"
+$folderRadio.Location = New-Object Drawing.Point(24, 158)
+$folderRadio.Size = New-Object Drawing.Size(510, 24)
+$folderBox = New-Object Windows.Forms.TextBox
+$folderBox.Location = New-Object Drawing.Point(44, 186)
+$folderBox.Size = New-Object Drawing.Size(390, 26)
+$folderBox.Enabled = $false
+$folderButton = New-Object Windows.Forms.Button
+$folderButton.Text = "Browse..."
+$folderButton.Location = New-Object Drawing.Point(440, 185)
+$folderButton.Size = New-Object Drawing.Size(94, 28)
+$folderButton.Enabled = $false
+$folderHint = New-Label "The folder with your project, or a parent folder that holds several." 44 214 490 20 9 $false $muted
+$ask.Controls.AddRange(@($gitRadio, $folderRadio, $folderBox, $folderButton, $folderHint))
+$folderRadio.Add_CheckedChanged({ $folderBox.Enabled = $folderRadio.Checked; $folderButton.Enabled = $folderRadio.Checked })
+$folderButton.Add_Click({
+    $d = New-Object Windows.Forms.FolderBrowserDialog
+    $d.Description = "Choose the folder that holds your dbt project"
+    if ($d.ShowDialog($form) -eq "OK") { $folderBox.Text = $d.SelectedPath }
+})
+
+$ask.Controls.Add((New-Label "Install in" 24 252 300 20 10 $true))
+$dirBox = New-Object Windows.Forms.TextBox
+$dirBox.Location = New-Object Drawing.Point(24, 276)
+$dirBox.Size = New-Object Drawing.Size(410, 26)
+$dirBox.Text = $DefaultDir
+$dirButton = New-Object Windows.Forms.Button
+$dirButton.Text = "Browse..."
+$dirButton.Location = New-Object Drawing.Point(440, 275)
+$dirButton.Size = New-Object Drawing.Size(94, 28)
+$dirButton.Add_Click({
+    $d = New-Object Windows.Forms.FolderBrowserDialog
+    if ($d.ShowDialog($form) -eq "OK") { $dirBox.Text = Join-Path $d.SelectedPath "dbt-portal" }
+})
+$ask.Controls.AddRange(@($dirBox, $dirButton))
+$ask.Controls.Add((New-Label "Running it again later upgrades the portal; accounts and history are kept." 24 306 510 20 9 $false $muted))
+
+$installButton = New-Object Windows.Forms.Button
+$installButton.Text = "Install"
+$installButton.Location = New-Object Drawing.Point(394, 410)
+$installButton.Size = New-Object Drawing.Size(140, 40)
+$installButton.BackColor = $blue
+$installButton.ForeColor = [Drawing.Color]::White
+$installButton.FlatStyle = "Flat"
+$installButton.Font = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
+$ask.Controls.Add($installButton)
+$form.AcceptButton = $installButton
+$form.Controls.Add($ask)
+
+# Page 2: progress, then the result
+$run = New-Object Windows.Forms.Panel
+$run.Location = New-Object Drawing.Point(0, 78)
+$run.Size = New-Object Drawing.Size(560, 482)
+$run.Visible = $false
+$stepLabel = New-Label "Starting..." 24 18 510 24 12 $true
+$detailLabel = New-Label "" 24 44 510 20 9 $false $muted
+$bar = New-Object Windows.Forms.ProgressBar
+$bar.Location = New-Object Drawing.Point(24, 70)
+$bar.Size = New-Object Drawing.Size(510, 14)
+$bar.Maximum = 40
+$logBox = New-Object Windows.Forms.TextBox
+$logBox.Multiline = $true
+$logBox.ReadOnly = $true
+$logBox.ScrollBars = "Vertical"
+$logBox.Font = New-Object Drawing.Font("Consolas", 8.5)
+$logBox.Location = New-Object Drawing.Point(24, 98)
+$logBox.Size = New-Object Drawing.Size(510, 190)
+$logBox.BackColor = [Drawing.Color]::FromArgb(245, 247, 250)
+$run.Controls.AddRange(@($stepLabel, $detailLabel, $bar, $logBox))
+
+$doneBox = New-Object Windows.Forms.Panel
+$doneBox.Location = New-Object Drawing.Point(24, 300)
+$doneBox.Size = New-Object Drawing.Size(510, 170)
+$doneBox.Visible = $false
+$doneBox.Controls.Add((New-Label "Sign in as admin with this password (shown once):" 0 0 510 20 9 $false $muted))
+$passBox = New-Object Windows.Forms.TextBox
+$passBox.ReadOnly = $true
+$passBox.Font = New-Object Drawing.Font("Consolas", 12)
+$passBox.Location = New-Object Drawing.Point(0, 24)
+$passBox.Size = New-Object Drawing.Size(380, 28)
+$copyButton = New-Object Windows.Forms.Button
+$copyButton.Text = "Copy"
+$copyButton.Location = New-Object Drawing.Point(390, 23)
+$copyButton.Size = New-Object Drawing.Size(120, 30)
+$copyButton.Add_Click({ if ($passBox.Text) { [Windows.Forms.Clipboard]::SetText($passBox.Text) } })
+$openButton = New-Object Windows.Forms.Button
+$openButton.Text = "Open the portal"
+$openButton.Location = New-Object Drawing.Point(330, 120)
+$openButton.Size = New-Object Drawing.Size(180, 40)
+$openButton.BackColor = $blue
+$openButton.ForeColor = [Drawing.Color]::White
+$openButton.FlatStyle = "Flat"
+$openButton.Font = New-Object Drawing.Font("Segoe UI", 10, [Drawing.FontStyle]::Bold)
+$doneNote = New-Label "A 'dbt Portal' shortcut is on your desktop. The Setup Assistant takes it from here." 0 64 510 40 9 $false $muted
+$doneBox.Controls.AddRange(@($passBox, $copyButton, $openButton, $doneNote))
+
+$failBox = New-Object Windows.Forms.Panel
+$failBox.Location = New-Object Drawing.Point(24, 300)
+$failBox.Size = New-Object Drawing.Size(510, 170)
+$failBox.Visible = $false
+$failText = New-Label "" 0 0 510 60 10 $false ([Drawing.Color]::FromArgb(180, 35, 24))
+$getDocker = New-Object Windows.Forms.LinkLabel
+$getDocker.Text = "Download Docker Desktop"
+$getDocker.Location = New-Object Drawing.Point(0, 66)
+$getDocker.Size = New-Object Drawing.Size(300, 22)
+$getDocker.Visible = $false
+$getDocker.Add_LinkClicked({ Start-Process "https://www.docker.com/products/docker-desktop/" })
+$retryButton = New-Object Windows.Forms.Button
+$retryButton.Text = "Try again"
+$retryButton.Location = New-Object Drawing.Point(370, 120)
+$retryButton.Size = New-Object Drawing.Size(140, 40)
+$failBox.Controls.AddRange(@($failText, $getDocker, $retryButton))
+$run.Controls.AddRange(@($doneBox, $failBox))
+$form.Controls.Add($run)
+
+# -- Running it ---------------------------------------------------------------
+$state = @{ proc = $null; read = 0; url = $null; password = $null; runtime = $false; step = 0 }
+$timer = New-Object Windows.Forms.Timer
+$timer.Interval = 400
+
+function Show-Lines([string[]]$lines) {
+    foreach ($line in $lines) {
+        if ($line -match '^##STEP (\d) (.*)$') {
+            $state.step = [int]$Matches[1]
+            $stepLabel.Text = "Step $($Matches[1]) of 4: $($Matches[2])"
+            $bar.Value = [Math]::Min($bar.Maximum, ($state.step - 1) * 10 + 1)
+            continue
+        }
+        if ($line -eq "##NEEDS_RUNTIME") { $state.runtime = $true; continue }
+        if ($line -match '^##URL (\S+)') { $state.url = $Matches[1]; continue }
+        if ($line -match '\|\s+admin\s+(\S+)\s*$') { $state.password = $Matches[1] }
+        if ($line -match '^==> (.*)$') { $detailLabel.Text = $Matches[1] }
+        if ($line.Trim()) { $logBox.AppendText($line + "`r`n") }
+        # Creep forward inside a step so long pulls do not look frozen.
+        if ($state.step -gt 0 -and $bar.Value -lt $state.step * 10 - 1) { $bar.Value += 1 }
+    }
+}
+
+$timer.Add_Tick({
+    if (Test-Path $LogFile) {
+        $fs = [IO.File]::Open($LogFile, "Open", "Read", "ReadWrite")
+        try {
+            $fs.Seek($state.read, "Begin") | Out-Null
+            $reader = New-Object IO.StreamReader($fs)
+            $text = $reader.ReadToEnd()
+            $state.read = $fs.Position
+        } finally { $fs.Dispose() }
+        if ($text) { Show-Lines ($text -split "\r?\n") }
+    }
+    if ($state.proc -and $state.proc.HasExited) {
+        $timer.Stop()
+        if ($Unattended) {
+            if ($env:PORTAL_INSTALL_RESULT) {
+                "exit=$($state.proc.ExitCode) url=$($state.url) password_found=$([bool]$state.password)" | Set-Content $env:PORTAL_INSTALL_RESULT
+                Copy-Item $LogFile ($env:PORTAL_INSTALL_RESULT + ".log") -ErrorAction SilentlyContinue
+            }
+            $form.Close()
+            return
+        }
+        if ($state.proc.ExitCode -eq 0) {
+            $bar.Value = $bar.Maximum
+            $stepLabel.Text = "The portal is running"
+            $detailLabel.Text = if ($state.url) { $state.url } else { "" }
+            if ($state.password) { $passBox.Text = $state.password }
+            else { $passBox.Text = "(set earlier: the accounts already exist)" }
+            $doneBox.Visible = $true
+            if ($state.url) { Start-Process ($state.url + "setup") }
+        } else {
+            $stepLabel.Text = "The install stopped"
+            if ($state.runtime) {
+                $failText.Text = "The portal runs in Docker. Install Docker Desktop, start it, then click Try again."
+                $getDocker.Visible = $true
+            } else {
+                $failText.Text = "Something went wrong (see the log above). Fix it and click Try again: nothing is lost."
+            }
+            $failBox.Visible = $true
+        }
+    }
+})
+
+$installButton.Add_Click({
+    $token = $tokenBox.Text.Trim()
+    if (-not $token) { [Windows.Forms.MessageBox]::Show($form, "Paste the access token you were sent.", "dbt Portal") | Out-Null; return }
+    if ($folderRadio.Checked -and -not (Test-Path $folderBox.Text -PathType Container)) {
+        [Windows.Forms.MessageBox]::Show($form, "Choose the folder that holds your dbt project.", "dbt Portal") | Out-Null; return
+    }
+    $jobFile = Join-Path $Work "job.ps1"
+    [IO.File]::WriteAllText($jobFile, $Job)
+    if (Test-Path $LogFile) { Remove-Item $LogFile }
+    $state.read = 0; $state.url = $null; $state.password = $null; $state.runtime = $false; $state.step = 0
+    $logBox.Clear(); $bar.Value = 0; $doneBox.Visible = $false; $failBox.Visible = $false; $getDocker.Visible = $false
+
+    $env:PORTAL_TOKEN = $token
+    $env:PI_REPO = $Repo
+    $env:PI_DIR = $dirBox.Text.Trim()
+    $env:PI_WORK = $Work
+    $env:PI_PROJECTS_ROOT = if ($folderRadio.Checked) { $folderBox.Text.Trim() } else { "" }
+    $state.proc = Start-Process powershell -PassThru -WindowStyle Hidden -RedirectStandardOutput $LogFile `
+        -RedirectStandardError (Join-Path $Work "errors.log") `
+        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$jobFile`"")
+    # Read the handle now: without it, ExitCode stays empty once the process ends.
+    $null = $state.proc.Handle
+    $ask.Visible = $false
+    $run.Visible = $true
+    $timer.Start()
+})
+
+$retryButton.Add_Click({ $run.Visible = $false; $ask.Visible = $true })
+$openButton.Add_Click({ if ($state.url) { Start-Process ($state.url + "setup") } })
+$form.Add_FormClosing({
+    if ($state.proc -and -not $state.proc.HasExited) {
+        $answer = [Windows.Forms.MessageBox]::Show($form, "The install is still running. Stop it?", "dbt Portal", "YesNo")
+        if ($answer -ne "Yes") { $_.Cancel = $true; return }
+        try { $state.proc.Kill() } catch { }
+    }
+})
+
+# Unattended (PORTAL_INSTALL_UNATTENDED=1): the same window runs on its own and
+# closes when it is done, for scripted installs and tests. PORTAL_INSTALL_FOLDER
+# shares a project folder, PORTAL_INSTALL_DIR picks the install folder, and
+# PORTAL_INSTALL_RESULT is a file that receives the outcome and the log.
+$Unattended = $env:PORTAL_INSTALL_UNATTENDED -eq "1"
+if ($Unattended) {
+    if ($env:PORTAL_INSTALL_FOLDER) { $folderRadio.Checked = $true; $folderBox.Text = $env:PORTAL_INSTALL_FOLDER }
+    if ($env:PORTAL_INSTALL_DIR) { $dirBox.Text = $env:PORTAL_INSTALL_DIR }
+    $form.Add_Shown({ $installButton.PerformClick() })
+}
+
+[void]$form.ShowDialog()
+Remove-Item $Work -Recurse -Force -ErrorAction SilentlyContinue

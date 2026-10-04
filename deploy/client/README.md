@@ -10,6 +10,19 @@ The portal runs as a set of small services: sign-in, the dbt runner and its
 semantic layer, a PostgreSQL database and Redis. You don't manage them one by
 one: the script starts them all and they restart on their own.
 
+## Quickstart on Windows: download and double-click
+
+Download **Install-DbtPortal.cmd** (from the download page,
+`deploy/client/download/`, or the portal release on GitHub) and open it. A
+window asks for the access token you were sent and where your dbt project is
+(a Git repository, or a folder on this computer), then installs everything,
+showing each step. It starts Docker Desktop or Podman if they are installed but
+not running, opens the portal, shows the admin password and puts a
+**dbt Portal** shortcut on the desktop. Run it again later to upgrade.
+
+Windows may warn that it protected your PC (the file is not signed yet): click
+**More info**, then **Run anyway**.
+
 ## Quickstart (one command)
 
 You need:
