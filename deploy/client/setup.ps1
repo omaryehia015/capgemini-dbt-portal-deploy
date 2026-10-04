@@ -2,6 +2,8 @@
 # from the pre-built images. Needs Docker Desktop, or Podman Desktop with a
 # compose provider; no build, no Python/Node/dbt on this machine.
 #
+#   .\setup.ps1                                               # connect the dbt project (Git) in the portal
+#   .\setup.ps1 -ProjectsRoot C:\work                         # share a folder; pick the project in the portal
 #   .\setup.ps1 -Project C:\work\my-dbt-project
 #   .\setup.ps1 -Project C:\work\my-dbt-project -Port 8081 -Release 2026.10.0
 #   .\setup.ps1 -Project C:\work\my-dbt-project -SkipPull     # images already here (docker load)
@@ -17,16 +19,20 @@
 # An answers file is KEY=VALUE lines: PROJECT, PORT, RELEASE and WORKERS set
 # the options above; any other key (AIRFLOW_URL, AIRBYTE_MODE=off, ...) is
 # written to .env. See portal.answers.example.
+# Private images: set $env:PORTAL_TOKEN (a read-only registry token, with
+# $env:PORTAL_USER_NAME if it is not "portal") and the script signs in for you.
 # If Windows blocks the script: powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Project ...
 [CmdletBinding()]
 param(
     [string]$Project,
+    [string]$ProjectsRoot,
     [int]$Port = 0,
     [string]$Release,
     [int]$Workers = 1,
     [string]$Answers,
     [switch]$NonInteractive,
     [switch]$SkipPull,
+    [switch]$NoBrowser,
     [switch]$Check
 )
 $ErrorActionPreference = "Stop"
@@ -52,6 +58,7 @@ if ($Answers) {
         $key = $Matches[1].Trim(); $value = $Matches[2].Trim()
         switch ($key) {
             "PROJECT" { if (-not $Project) { $Project = $value } }
+            "PROJECTS_ROOT" { if (-not $ProjectsRoot) { $ProjectsRoot = $value } }
             "PORT" { if ($Port -eq 0) { $Port = [int]$value } }
             "RELEASE" { if (-not $Release) { $Release = $value } }
             "WORKERS" { $Workers = [int]$value }
@@ -61,15 +68,34 @@ if ($Answers) {
 }
 
 # -- 2. The dbt project --------------------------------------------------------
-if (-not $Project) {
-    if ($NonInteractive) { Fail "No dbt project given (PROJECT= in the answers file, or -Project)." }
-    $Project = Read-Host "Path to your dbt project (the folder with dbt_project.yml)"
+# No folder given: the portal gets the project from a Git repository you connect
+# in its Setup Assistant (the portal keeps its own copy). A folder is mounted live.
+if (-not $Project -and -not $ProjectsRoot -and -not $NonInteractive) {
+    Say "Your dbt project"
+    Write-Host "  1) A Git repository (you connect it in the portal; recommended)"
+    Write-Host "  2) A folder on this machine (you pick the project in the portal)"
+    if ((Read-Host "Choose 1 or 2 [1]") -eq "2") {
+        $ProjectsRoot = Read-Host "Folder that holds your dbt project (or several; a parent folder is fine)"
+    }
 }
-$Project = $Project.Trim('"')
-if (-not (Test-Path (Join-Path $Project "dbt_project.yml"))) { Fail "No dbt_project.yml in '$Project'." }
-$Project = (Resolve-Path $Project).Path
-if (-not (Test-Path (Join-Path $Project ".env"))) {
-    Warn "$Project\.env is missing. The portal reads the warehouse credentials from it."
+# The portal keeps its own workspace volume unless one fixed project folder is mounted.
+$GitMode = -not $Project
+if ($ProjectsRoot) {
+    $ProjectsRoot = $ProjectsRoot.Trim('"')
+    if (-not (Test-Path $ProjectsRoot -PathType Container)) { Fail "The folder '$ProjectsRoot' does not exist." }
+    $ProjectsRoot = (Resolve-Path $ProjectsRoot).Path
+    Ok "Sharing $ProjectsRoot with the portal: you pick the project in the Setup Assistant"
+    if ($Project) { Warn "-Project is used as a fixed project; -ProjectsRoot only adds the shared folder." }
+}
+if ($GitMode) {
+    if (-not $ProjectsRoot) { Ok "The project is connected in the portal (Setup Assistant)" }
+} else {
+    $Project = $Project.Trim('"')
+    if (-not (Test-Path (Join-Path $Project "dbt_project.yml"))) { Fail "No dbt_project.yml in '$Project'." }
+    $Project = (Resolve-Path $Project).Path
+    if (-not (Test-Path (Join-Path $Project ".env"))) {
+        Warn "$Project\.env is missing. The portal reads the warehouse credentials from it."
+    }
 }
 
 # -- 3. .env: secrets once, project / port / versions every run ----------------
@@ -79,21 +105,36 @@ foreach ($key in "JWT_SECRET", "CUBE_API_SECRET", "POSTGRES_PASSWORD", "REDIS_PA
     if (-not (Get-Env $key)) { Set-Env $key (New-Secret) }
 }
 
-# Podman's Windows client mangles absolute paths (/mnt/c/mnt/c/...): give it
-# the project relative to compose.yaml. Docker Desktop takes the Windows path.
-$projectPath = $Project
-if ($E -eq "podman") {
-    $from = New-Object Uri ($Root.TrimEnd('\') + '\')
-    $rel = [Uri]::UnescapeDataString($from.MakeRelativeUri((New-Object Uri $Project)).ToString())
-    if (-not $rel.StartsWith("file:")) { $projectPath = $rel.TrimEnd('/') }
+# Podman's Windows client mangles absolute paths (/mnt/c/mnt/c/...): give it a folder
+# relative to compose.yaml. Docker Desktop takes the Windows path.
+function Get-MountPath($folder) {
+    if ($E -eq "podman") {
+        $from = New-Object Uri ($Root.TrimEnd('\') + '\')
+        $rel = [Uri]::UnescapeDataString($from.MakeRelativeUri((New-Object Uri $folder)).ToString())
+        if (-not $rel.StartsWith("file:")) { return $rel.TrimEnd('/') }
+    }
+    return ($folder -replace '\\', '/')
 }
-Set-Env DBT_PROJECT_PATH ($projectPath -replace '\\', '/')
+if ($GitMode) {
+    # Empty: compose falls back to its own workspace volume, where the portal clones the repository.
+    Set-Env DBT_PROJECT_PATH ""
+} else {
+    Set-Env DBT_PROJECT_PATH (Get-MountPath $Project)
+}
+# The host folder shared with the portal; empty falls back to an unused volume.
+if ($ProjectsRoot) {
+    Set-Env DBT_PROJECTS_ROOT (Get-MountPath $ProjectsRoot)
+    Set-Env PORTAL_PROJECTS_HOST ($ProjectsRoot -replace '\\', '/')
+} else {
+    Set-Env DBT_PROJECTS_ROOT ""
+    Set-Env PORTAL_PROJECTS_HOST ""
+}
 if ($Port -gt 0) { Set-Env PORTAL_PORT $Port }
 $Port = if (Get-Env PORTAL_PORT) { [int](Get-Env PORTAL_PORT) } else { 8080 }
 foreach ($key in $extraEnv.Keys) { Set-Env $key $extraEnv[$key] }
 if ($extraEnv.Count) { Say "Applied $($extraEnv.Count) setting(s) from $Answers" }
 # Bind mounts on Windows show every file as root-owned: run as root so `dbt deps` can write.
-Set-Env PORTAL_USER "0:0"
+if (-not $GitMode -or $ProjectsRoot) { Set-Env PORTAL_USER "0:0" }
 
 if ($Release) {
     $text = Get-Content releases.yml -Raw
@@ -109,32 +150,46 @@ if ($Release) {
 
 # Where profiles.yml is: in the project (seen as /workspace), or ~\.dbt.
 Remove-Item compose.override.yaml -ErrorAction SilentlyContinue
-$userDbt = Join-Path $env:USERPROFILE ".dbt"
-if (Test-Path (Join-Path $Project "profiles.yml")) { }
-elseif (Test-Path (Join-Path $Project "profiles\profiles.yml")) { Set-Env DBT_PROFILES_DIR "/workspace/profiles" }
-elseif (Test-Path (Join-Path $userDbt "profiles.yml")) {
-    Set-Env DBT_PROFILES_DIR "/profiles"
-    $mount = ($userDbt -replace '\\', '/') + ":/profiles:ro"
-    $override = @("# Written by setup.ps1: profiles.yml comes from ~\.dbt on this machine.", "services:")
-    foreach ($svc in "execution", "worker", "insights", "semantic") { $override += "  ${svc}:", "    volumes: [""$mount""]" }
-    [IO.File]::WriteAllLines((Join-Path $Root "compose.override.yaml"), [string[]]$override, (New-Object Text.UTF8Encoding $false))
+if (-not $GitMode) {
+    $userDbt = Join-Path $env:USERPROFILE ".dbt"
+    if (Test-Path (Join-Path $Project "profiles.yml")) { }
+    elseif (Test-Path (Join-Path $Project "profiles\profiles.yml")) { Set-Env DBT_PROFILES_DIR "/workspace/profiles" }
+    elseif (Test-Path (Join-Path $userDbt "profiles.yml")) {
+        Set-Env DBT_PROFILES_DIR "/profiles"
+        $mount = ($userDbt -replace '\\', '/') + ":/profiles:ro"
+        $override = @("# Written by setup.ps1: profiles.yml comes from ~\.dbt on this machine.", "services:")
+        foreach ($svc in "execution", "worker", "insights", "semantic") { $override += "  ${svc}:", "    volumes: [""$mount""]" }
+        [IO.File]::WriteAllLines((Join-Path $Root "compose.override.yaml"), [string[]]$override, (New-Object Text.UTF8Encoding $false))
+    }
+    else { Warn "No profiles.yml found in the project or $userDbt." }
 }
-else { Warn "No profiles.yml found in the project or $userDbt." }
 
 # -- 4. Pull and start ---------------------------------------------------------
+function Sign-In($user, $plain) {
+    $registry = if (Get-Env IMAGE_REGISTRY) { Get-Env IMAGE_REGISTRY } else { "ghcr.io/omaryehia015" }
+    $plain | & $E login ($registry -split '/')[0] -u $user --password-stdin *> $null
+    if ($LASTEXITCODE -ne 0) { Fail "The registry did not accept that token." }
+    Ok "Signed in to $(($registry -split '/')[0])"
+}
 if (-not $SkipPull) {
-    Say "Pulling images"
     $ErrorActionPreference = "Continue"
-    & $E compose pull --quiet *> $null
+    if ($env:PORTAL_TOKEN) {
+        Say "Signing in to the image registry"
+        $tokenUser = if ($env:PORTAL_USER_NAME) { $env:PORTAL_USER_NAME } else { "portal" }
+        Sign-In $tokenUser $env:PORTAL_TOKEN
+    }
+    Say "Downloading the portal images (a few minutes the first time)"
+    & $E compose pull
     if ($LASTEXITCODE -ne 0) {
-        if ($NonInteractive) { Fail "Pulling the images failed. Sign in first: $E login ghcr.io" }
-        $registry = if (Get-Env IMAGE_REGISTRY) { Get-Env IMAGE_REGISTRY } else { "ghcr.io/omaryehia015" }
-        Write-Host "The images need a sign-in. Use the registry username and read-only token you were given."
-        $user = Read-Host "Registry username"
+        if ($NonInteractive) { Fail "Pulling the images failed. Set PORTAL_TOKEN, or sign in first: $E login ghcr.io" }
+        Write-Host ""
+        Write-Host "The images are private. Paste the access token you were sent."
+        $user = Read-Host "Registry username [portal]"
+        if (-not $user) { $user = "portal" }
         $token = Read-Host "Token" -AsSecureString
         $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($token))
-        $plain | & $E login ($registry -split '/')[0] -u $user --password-stdin
-        Compose pull --quiet
+        Sign-In $user $plain
+        Compose pull
     }
     $ErrorActionPreference = "Stop"
 }
@@ -148,13 +203,16 @@ Say "Portal is up: http://localhost:$Port"
 $ErrorActionPreference = "Continue"
 $creds = (& $E compose logs identity 2>&1 | Out-String) -split "\r?\n" | Where-Object { $_.Trim() } | Select-String -Pattern "GENERATED INITIAL CREDENTIALS" -Context 0, 5
 if ($creds) { $creds | ForEach-Object { $_.Line; $_.Context.PostContext } } else { "No new passwords printed: the accounts already exist from an earlier run." }
+$url = "http://localhost:$Port/setup"
+$next = if ($ProjectsRoot) { "Step 2 of the Setup Assistant: pick your project from the folder you shared (or use Git)." } elseif ($GitMode) { "Step 2 of the Setup Assistant connects your dbt project (Git)." } else { "Setup Assistant: workspace, warehouse, dbt project, team." }
+Write-Host ""
+Write-Host "  +----------------------------------------------------------+" -ForegroundColor Cyan
+Write-Host "  |  The portal is running                                   |" -ForegroundColor Cyan
+Write-Host "  +----------------------------------------------------------+" -ForegroundColor Cyan
+Write-Host "    Open:    $url"
+Write-Host "    Sign in: admin (password above; change it under My account)"
+Write-Host "    Then:    $next"
 @"
-
-Next:
-  1. Open http://localhost:$Port/setup and sign in as 'admin' (password printed on the first run).
-  2. The Setup Assistant walks through the workspace, warehouse, dbt project, modules
-     (Airbyte, Airflow, ...) and team.
-  3. Change the admin password under My account.
 
 Day to day (from $Root):
   .\manage.ps1 status            # what is running, and whether it is healthy
@@ -162,3 +220,4 @@ Day to day (from $Root):
   .\manage.ps1 doctor            # check this machine and the stack
   .\manage.ps1 help              # everything else
 "@
+if (-not $NoBrowser -and -not $NonInteractive) { Start-Process $url }

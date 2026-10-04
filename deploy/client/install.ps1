@@ -4,16 +4,18 @@
 #   irm https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.ps1 | iex
 #
 # Environment (set before running):
-#   $env:PORTAL_PROJECT   the dbt project folder (asked for when not set)
+#   $env:PORTAL_TOKEN     the access token you were sent (downloads the kit, signs in to the images)
+#   $env:PORTAL_PROJECT   a dbt project folder (not set: you connect a Git repository in the portal)
 #   $env:PORTAL_RELEASE   release to install (default: latest)
 #   $env:PORTAL_DIR       where to unpack the kit (default: ~\dbt-portal)
-#   $env:GITHUB_TOKEN     needed while the deploy repository is private
+#   $env:GITHUB_TOKEN     same as PORTAL_TOKEN (older name)
 $ErrorActionPreference = "Stop"
 $repo = "omaryehia015/capgemini-dbt-portal-deploy"
 $release = if ($env:PORTAL_RELEASE) { $env:PORTAL_RELEASE } else { "latest" }
 $dir = if ($env:PORTAL_DIR) { $env:PORTAL_DIR } else { Join-Path $HOME "dbt-portal" }
 $headers = @{}
-if ($env:GITHUB_TOKEN) { $headers["Authorization"] = "Bearer $env:GITHUB_TOKEN" }
+if (-not $env:PORTAL_TOKEN -and $env:GITHUB_TOKEN) { $env:PORTAL_TOKEN = $env:GITHUB_TOKEN }
+if ($env:PORTAL_TOKEN) { $headers["Authorization"] = "Bearer $env:PORTAL_TOKEN" }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 if ($release -eq "latest") {
@@ -27,7 +29,7 @@ $tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid())
 New-Item -ItemType Directory $tmp | Out-Null
 $zip = Join-Path $tmp "kit.zip"
 Write-Host "`n==> Downloading $kit" -ForegroundColor Cyan
-if ($env:GITHUB_TOKEN) {
+if ($env:PORTAL_TOKEN) {
     # A private repository's assets come through the API.
     $rel = Invoke-RestMethod -Headers $headers "https://api.github.com/repos/$repo/releases/tags/portal-$release"
     $asset = $rel.assets | Where-Object { $_.name -eq "$kit.zip" } | Select-Object -First 1
@@ -45,5 +47,6 @@ Copy-Item -Path (Join-Path $tmp "$kit\.env.example") -Destination $dir -Force
 Remove-Item -Recurse -Force $tmp
 Write-Host "`n==> Kit unpacked in $dir" -ForegroundColor Cyan
 
-$project = if ($env:PORTAL_PROJECT) { $env:PORTAL_PROJECT } else { Read-Host "Path to your dbt project (the folder with dbt_project.yml)" }
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir "setup.ps1") -Project $project
+$setupArgs = @()
+if ($env:PORTAL_PROJECT) { $setupArgs += @("-Project", $env:PORTAL_PROJECT) }
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir "setup.ps1") @setupArgs

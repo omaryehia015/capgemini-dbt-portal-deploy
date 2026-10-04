@@ -14,34 +14,40 @@ one: the script starts them all and they restart on their own.
 
 You need:
 
-- The folder of your dbt project, the one with `dbt_project.yml` in it.
-- Your warehouse credentials in that project's own `.env`. The portal reads
-  them from there, the same way your `profiles.yml` does.
-- A registry username and read-only token, if the images are private. The
-  script asks for them the first time.
+- The **access token** you were sent. It lets this machine download the
+  private images; the script signs in with it for you.
+- Optional: the folder of your dbt project (the one with `dbt_project.yml`).
+  Without one, you connect a **Git repository** inside the portal's Setup
+  Assistant, so there is nothing to prepare on this machine.
 
-**Straight from the internet** (downloads this kit, then runs the setup below):
+The easiest way is the download page (`deploy/client/download/index.html`):
+paste the token, copy the command it builds for your OS, run it. Or by hand:
 
 ```bash
 # macOS / Linux / WSL / a Linux VM
-curl -fsSL https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.sh   | bash -s -- ~/work/my-dbt-project
+curl -fsSL -H "Authorization: Bearer $PORTAL_TOKEN" https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.sh | PORTAL_TOKEN=$PORTAL_TOKEN bash
 ```
 
 ```powershell
 # Windows
-$env:PORTAL_PROJECT = "C:\work\my-dbt-project"
-irm https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.ps1 | iex
+$env:PORTAL_TOKEN = "<token you were sent>"
+irm -Headers @{ Authorization = "Bearer $env:PORTAL_TOKEN" } https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.ps1 | iex
 ```
 
-While the deploy repository is private, set `GITHUB_TOKEN` first. `PORTAL_RELEASE`
-picks a release and `PORTAL_DIR` the folder (default `~/dbt-portal`).
+It downloads the kit, signs in to the registry, pulls the images, starts the
+portal and opens it in your browser. To use a folder on this machine instead
+of Git, add its path: `PORTAL_PROJECT` (Windows) or `bash -s -- <folder>`
+(macOS / Linux). `PORTAL_RELEASE` picks a release and `PORTAL_DIR` the folder
+(default `~/dbt-portal`). For a registry user other than `portal`, set
+`PORTAL_USER_NAME`.
 
 **From the unpacked kit:**
 
 **Windows (PowerShell):**
 
 ```powershell
-.\setup.ps1 -Project C:\work\my-dbt-project
+.\setup.ps1                                    # connect the project (Git) in the portal
+.\setup.ps1 -Project C:\work\my-dbt-project    # or use a folder on this machine
 ```
 
 If Windows blocks the script, run
@@ -50,7 +56,8 @@ If Windows blocks the script, run
 **Linux / macOS:**
 
 ```bash
-./setup.sh ~/work/my-dbt-project
+./setup.sh                          # connect the project (Git) in the portal
+./setup.sh ~/work/my-dbt-project    # or use a folder on this machine
 ```
 
 The first run writes a `.env` next to the script with generated secrets

@@ -3,13 +3,17 @@
 # setup.sh. macOS, Linux, WSL and Linux VMs.
 #
 #   curl -fsSL https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.sh \
-#     | bash -s -- /path/to/my-dbt-project
+#     | PORTAL_TOKEN=<token you were sent> bash
+#
+# Add `-s -- /path/to/my-dbt-project` after `bash` to use a folder on this machine;
+# without one you connect a Git repository in the portal.
 #
 # Anything after `--` goes to setup.sh (--port, --answers, --workers ...).
 # Environment:
 #   PORTAL_RELEASE   release to install (default: latest)
 #   PORTAL_DIR       where to unpack the kit (default: ~/dbt-portal)
-#   GITHUB_TOKEN     needed while the deploy repository is private
+#   PORTAL_TOKEN     the access token you were sent (downloads the kit, signs in to the images)
+#   GITHUB_TOKEN     same as PORTAL_TOKEN (older name)
 set -euo pipefail
 
 REPO="omaryehia015/capgemini-dbt-portal-deploy"
@@ -21,20 +25,21 @@ say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v unzip >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 || fail "unzip (or python3) is required."
 
+export PORTAL_TOKEN="${PORTAL_TOKEN:-${GITHUB_TOKEN:-}}"
 auth=()
-[[ -n "${GITHUB_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+[[ -n "$PORTAL_TOKEN" ]] && auth=(-H "Authorization: Bearer $PORTAL_TOKEN")
 
 if [[ "$RELEASE" == latest ]]; then
     RELEASE="$(curl -fsSL "${auth[@]+"${auth[@]}"}" "https://raw.githubusercontent.com/$REPO/main/releases.yml" \
         | sed -n 's/^latest: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')" \
-        || fail "Could not read releases.yml (set GITHUB_TOKEN if the repository is private)."
+        || fail "Could not read releases.yml (set PORTAL_TOKEN if the repository is private)."
 fi
 [[ -n "$RELEASE" ]] || fail "Could not work out the latest release."
 
 kit="dbt-portal-client-kit-$RELEASE"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 say "Downloading $kit"
-if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+if [[ -n "$PORTAL_TOKEN" ]]; then
     # A private repository's assets come through the API.
     asset="$(curl -fsSL "${auth[@]}" "https://api.github.com/repos/$REPO/releases/tags/portal-$RELEASE" \
         | grep -o "\"url\": *\"[^\"]*/releases/assets/[0-9]*\"" | head -1 | sed 's/.*"\(https[^"]*\)"/\1/')"
@@ -42,7 +47,7 @@ if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     curl -fsSL "${auth[@]}" -H "Accept: application/octet-stream" -o "$tmp/kit.zip" "$asset"
 else
     curl -fsSL -o "$tmp/kit.zip" "https://github.com/$REPO/releases/download/portal-$RELEASE/$kit.zip" \
-        || fail "Download failed. For a private repository set GITHUB_TOKEN."
+        || fail "Download failed. For a private repository set PORTAL_TOKEN."
 fi
 
 if command -v unzip >/dev/null 2>&1; then unzip -q "$tmp/kit.zip" -d "$tmp"
