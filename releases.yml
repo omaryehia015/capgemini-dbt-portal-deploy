@@ -16,8 +16,19 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.7"
+latest: "2026.10.8"
 releases:
+  "2026.10.8":
+    backend: "1.4.0"
+    frontend: "1.4.0"
+    cube: "1.0.1"
+    notes: >-
+      AI for transformation on dbt Development: an AI assist panel drafts a
+      new model (SQL and properties YAML) from a description and its inputs,
+      writes the open model's schema YAML (descriptions, data types, key
+      tests), and suggests the data-quality tests it is missing, ranked, with
+      the reason for each. Uses the AI provider when one is connected and
+      rule-based drafts otherwise; nothing is saved until Create.
   "2026.10.7":
     backend: "1.3.0"
     frontend: "1.3.0"
