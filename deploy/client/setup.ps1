@@ -141,6 +141,25 @@ if ($extraEnv.Count) { Say "Applied $($extraEnv.Count) setting(s) from $Answers"
 if (-not $GitMode -or $ProjectsRoot -or $sharedBefore) { Set-Env PORTAL_USER "0:0" }
 
 if ($Release) {
+    # The kit's releases.yml is only as new as the kit: fetch the current one, so
+    # -Release latest and manage.ps1 upgrade reach releases made since it was
+    # downloaded. Only in an unpacked kit (a repo checkout keeps its own file).
+    if ($Root -eq $PSScriptRoot) {
+        $url = "https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/releases.yml"
+        $fresh = $null
+        try { $fresh = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 $url).Content } catch {
+            if ($env:PORTAL_TOKEN) {
+                try { $fresh = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 -Headers @{ Authorization = "Bearer $env:PORTAL_TOKEN" } $url).Content } catch { }
+            }
+        }
+        if ($fresh -is [byte[]]) { $fresh = [Text.Encoding]::UTF8.GetString($fresh) }
+        if ($fresh -and $fresh -match '(?m)^latest:') {
+            [IO.File]::WriteAllText((Join-Path $Root "releases.yml"), $fresh)
+            Ok "Release list updated (latest: $(([regex]::Match($fresh, '(?m)^latest:\s*"?([^"\r\n]+)"?')).Groups[1].Value))"
+        } else {
+            Warn "Could not fetch the current release list: using the one in this kit."
+        }
+    }
     $text = Get-Content releases.yml -Raw -Encoding UTF8
     if ($Release -eq "latest") { $Release = ([regex]::Match($text, '(?m)^latest:\s*"?([^"\r\n]+)"?')).Groups[1].Value }
     $block = [regex]::Match($text, '(?ms)^  "' + [regex]::Escape($Release) + '":\s*\r?\n(.*?)(?=^  "|\z)')

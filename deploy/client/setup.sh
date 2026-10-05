@@ -142,7 +142,26 @@ fi
 for pair in "${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}"; do set_env "${pair%%=*}" "${pair#*=}"; done
 [[ ${#EXTRA_ENV[@]} -gt 0 ]] && say "Applied ${#EXTRA_ENV[@]} setting(s) from $ANSWERS"
 
+# The kit's releases.yml is only as new as the kit: fetch the current one, so
+# `--release latest` and `manage.sh upgrade` reach releases made since it was
+# downloaded. Only in an unpacked kit (a repo checkout keeps its own file).
+refresh_releases() {
+    local url="https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/releases.yml" tmp
+    [[ "$ROOT" == "$here" ]] && command -v curl >/dev/null 2>&1 || return 0
+    tmp="$(mktemp)"
+    if { curl -fsSL -m 20 -o "$tmp" "$url" 2>/dev/null \
+        || { [[ -n "${PORTAL_TOKEN:-}" ]] && curl -fsSL -m 20 -H "Authorization: Bearer $PORTAL_TOKEN" -o "$tmp" "$url" 2>/dev/null; }; } \
+        && grep -q '^latest:' "$tmp"; then
+        cat "$tmp" > releases.yml
+        ok "Release list updated (latest: $(sed -n 's/^latest: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' releases.yml))"
+    else
+        warn "Could not fetch the current release list: using the one in this kit."
+    fi
+    rm -f "$tmp"
+}
+
 if [[ -n "$RELEASE" ]]; then
+    refresh_releases
     [[ "$RELEASE" == latest ]] && RELEASE="$(sed -n 's/^latest: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' releases.yml)"
     block="$(awk -v r="  \"$RELEASE\":" '$0==r{f=1;next} f&&/^  "/{f=0} f' releases.yml)"
     [[ -n "$block" ]] || fail "Release '$RELEASE' is not in releases.yml."
