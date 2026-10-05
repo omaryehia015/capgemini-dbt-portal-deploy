@@ -1,5 +1,5 @@
-# The gateway: nginx serving the SPA and routing each /api prefix (incl. the
-# job log WebSocket) to the service that owns it. Stateless.
+# The gateway: nginx serving the SPA and proxying /api (incl. the job log
+# WebSocket) to the backend. Stateless.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,10 +19,7 @@ spec:
           ports:
             - containerPort: 8080
           env:
-            - { name: IDENTITY_UPSTREAM, value: "dbt-portal-identity:8000" }
-            - { name: EXECUTION_UPSTREAM, value: "dbt-portal-execution:8000" }
-            - { name: INSIGHTS_UPSTREAM, value: "dbt-portal-insights:8000" }
-            - { name: SEMANTIC_UPSTREAM, value: "dbt-portal-semantic:8000" }
+            - { name: BACKEND_UPSTREAM, value: "dbt-portal-backend:8000" }
           readinessProbe:
             httpGet: { path: /, port: 8080 }
             periodSeconds: 15

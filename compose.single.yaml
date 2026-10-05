@@ -1,11 +1,10 @@
-# Single node: every backend service in one container, SQLite, no Redis.
-# For a laptop, a demo or a small team; it does not scale out. The
-# microservices stack (compose.yaml) is the default for anything shared.
+# Single node: the backend also runs dbt itself, SQLite, no Redis, no workers.
+# For a laptop, a demo or a small team; it does not scale out. The full
+# stack (compose.yaml, backend + workers) is the default for anything shared.
 #
 #   docker compose -f compose.single.yaml up -d
 #
-# Same images as compose.yaml: the backend image runs every service when
-# PORTAL_SERVICES is left at "all".
+# Same images as compose.yaml.
 services:
   backend:
     image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-backend:${BACKEND_TAG:-latest}

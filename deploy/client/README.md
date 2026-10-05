@@ -5,10 +5,10 @@ build anything or install Python, Node or dbt. All you need is **Docker
 Desktop** (or Docker Engine with the compose plugin), or **Podman** with a
 compose provider, running.
 
-The portal runs as a set of small services: sign-in, the dbt runner and its
-**workers** (where dbt actually runs), the read-only report pages, the
-semantic layer, a PostgreSQL database and Redis. You don't manage them one by
-one: the script starts them all and they restart on their own.
+The portal runs as a few containers: the portal API, its **workers** (where
+dbt actually runs), the web app, the semantic layer engine (Cube), a
+PostgreSQL database and Redis. You don't manage them one by one: the script
+starts them all and they restart on their own.
 
 ## Quickstart on Windows: download and double-click
 
@@ -158,7 +158,7 @@ From the folder with `compose.yaml` (on Windows: `.\manage.ps1 <command>`):
 
 ```bash
 ./manage.sh status              # every service, whether the portal answers, the modules
-./manage.sh logs execution      # follow a service's log (all of them without a name)
+./manage.sh logs backend        # follow a service's log (all of them without a name)
 ./manage.sh restart worker      # restart one service (or all of them)
 ./manage.sh stop | start        # stop everything, start again
 ./manage.sh doctor              # check this machine, the containers and the project
@@ -175,8 +175,8 @@ More dbt jobs at once: `./setup.sh <project> --workers 3`.
 | What you see | What to do |
 |---|---|
 | `doctor` says Docker/Podman is not running | Start Docker Desktop / Podman Desktop, then run the command again. |
-| A service is `unhealthy` or keeps restarting | `./manage.sh logs <service>`. The execution service's log starts with an `[OK]`/`[WARN]`/`[FAIL]` self-check of the project, the warehouse connection and the configuration. |
-| The portal does not answer | `./manage.sh logs frontend execution`; check nothing else uses the port (`--port 8081` to move it). |
+| A service is `unhealthy` or keeps restarting | `./manage.sh logs <service>`. The backend's log starts with an `[OK]`/`[WARN]`/`[FAIL]` self-check of the project, the warehouse connection and the configuration. |
+| The portal does not answer | `./manage.sh logs frontend backend`; check nothing else uses the port (`--port 8081` to move it). |
 | Lost the admin password | Run the setup app again and click **Forgot the admin password?**, or `./manage.sh reset-password` (`.\manage.ps1 reset-password`; inside the Podman machine: `podman machine ssh "cd ~/dbt-portal && ./manage.sh reset-password"`). It prints a new one, once. Another admin can also set one in Governance → Users. |
 | A module's Test connection fails | The failing line says why; its setup guide on the module page lists the usual fixes. |
 

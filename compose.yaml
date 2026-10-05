@@ -1,11 +1,10 @@
-# Capgemini dbt Portal, the microservices stack:
+# Capgemini dbt Portal:
 #
-#   browser -> frontend :8080 (SPA + gateway: routes each /api prefix to its service)
-#                ├─ identity    sign-in, users, roles, audit          -> postgres (portal_identity)
-#                ├─ execution   API: dbt runs, schedules, editor, ...  -> postgres (portal_execution)
-#                │    └─ worker(s) run the dbt jobs it queues          -> redis (queue, live logs)
-#                ├─ insights    Elementary, SQLFluff, profiler, FinOps, Ask AI (read side)
-#                └─ semantic    the semantic layer's control plane <- cube reads its config
+#   browser -> frontend :8080 (SPA + gateway to the portal API)
+#                └─ backend     the portal API: sign-in, dbt runs, schedules, editor,
+#                    │          reports, Ask AI, semantic layer  -> postgres (portal)
+#                    ├─ worker(s) run the dbt jobs it queues      -> redis (queue, live logs)
+#                    └─ cube      the semantic layer engine; reads its config from backend
 #
 # Only the frontend port is published; everything else is on the internal network.
 #
@@ -16,21 +15,8 @@
 # lists the combinations released together). Build from the sibling repos
 # instead with compose.build.yaml. Full guide: docs/ONBOARDING.md.
 
-x-backend-env: &backend-env
-  ENVIRONMENT: ${ENVIRONMENT:-production}
-  JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is not set - run deploy/client/setup.sh, or see .env.example}"
-  REDIS_URL: "redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is not set}@redis:6379/0"
-  IDENTITY_URL: http://identity:8000
-  EXECUTION_URL: http://execution:8000
-  INSIGHTS_URL: http://insights:8000
-  SEMANTIC_URL: http://semantic:8000
-  DBT_PROJECT_DIR: /workspace
-  # A host folder shared with the portal (setup.sh -ProjectsRoot): its path on the
-  # host, so the Setup Assistant can take "C:\work\my-project" as typed.
-  PORTAL_PROJECTS_HOST: ${PORTAL_PROJECTS_HOST:-}
-  LOG_FORMAT: ${LOG_FORMAT:-json}
-
 x-backend: &backend
+  image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-backend:${BACKEND_TAG:-latest}
   restart: unless-stopped
   env_file:
     - path: .env
@@ -39,18 +25,17 @@ x-backend: &backend
   # every file as root-owned and refuse chmod/utime from other users, which
   # makes `dbt deps` fail ("Operation not permitted"): set PORTAL_USER=0:0 there.
   user: "${PORTAL_USER:-10001:10001}"
-  depends_on:
-    postgres: { condition: service_healthy }
-    redis: { condition: service_healthy }
-  expose: ["8000"]
-  # Declared here rather than only in the Dockerfile: Podman builds OCI images
-  # by default, and OCI images drop HEALTHCHECK.
-  healthcheck:
-    test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/api/health"]
-    interval: 15s
-    timeout: 5s
-    start_period: 60s
-    retries: 3
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  JWT_SECRET: "${JWT_SECRET:?JWT_SECRET is not set - run deploy/client/setup.sh, or see .env.example}"
+  REDIS_URL: "redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is not set}@redis:6379/0"
+  DATABASE_URL: postgresql+psycopg2://portal:${POSTGRES_PASSWORD}@postgres:5432/portal
+  DBT_PROJECT_DIR: /workspace
+  # A host folder shared with the portal (setup.sh -ProjectsRoot): its path on the
+  # host, so the Setup Assistant can take "C:\work\my-project" as typed.
+  PORTAL_PROJECTS_HOST: ${PORTAL_PROJECTS_HOST:-}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
 
 services:
   postgres:
@@ -62,13 +47,30 @@ services:
       POSTGRES_DB: portal
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # One database per service that owns tables.
-      - ./postgres/init-databases.sql:/docker-entrypoint-initdb.d/10-databases.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U portal -d portal"]
       interval: 10s
       timeout: 5s
       retries: 10
+
+  # One-off, before the backend starts: moves the data of a portal from before
+  # 2026.11 (separate identity/execution databases, a semantic_data volume)
+  # into the one database and volume. Does nothing on a new or upgraded install.
+  upgrade:
+    image: ${POSTGRES_IMAGE:-docker.io/library/postgres:17-alpine}
+    restart: "no"
+    entrypoint: ["sh", "/upgrade.sh"]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Owner of /data: the user the backend runs as.
+      PORTAL_USER: ${PORTAL_USER:-10001:10001}
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ./postgres/upgrade.sh:/upgrade.sh:ro
+      - portal_data:/data
+      - execution_data:/old-execution-data:ro
+      - semantic_data:/old-semantic-data:ro
 
   redis:
     image: ${REDIS_IMAGE:-docker.io/library/redis:7-alpine}
@@ -84,22 +86,18 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
 
-  identity:
+  backend:
     <<: *backend
-    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-identity:${BACKEND_TAG:-latest}
     environment:
       <<: *backend-env
-      DATABASE_URL: postgresql+psycopg2://portal:${POSTGRES_PASSWORD}@postgres:5432/portal_identity
-
-  execution:
-    <<: *backend
-    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-backend:${BACKEND_TAG:-latest}
-    environment:
-      <<: *backend-env
-      PORTAL_SERVICES: execution
       # Serve the API; dbt runs on the worker(s).
       EXECUTION_ROLE: api
-      DATABASE_URL: postgresql+psycopg2://portal:${POSTGRES_PASSWORD}@postgres:5432/portal_execution
+      CUBE_API_SECRET: "${CUBE_API_SECRET:?CUBE_API_SECRET is not set}"
+      CUBE_API_URL: http://cube:4000
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      upgrade: { condition: service_completed_successfully }
     volumes:
       # The client dbt project. Read-write: the dbt editor saves files, and in
       # git mode (DBT_PROJECT_GIT_URL in .env) this container clones it.
@@ -107,27 +105,34 @@ services:
       # The host folder shared with the portal, when there is one: projects in it
       # are chosen in the Setup Assistant (an empty volume otherwise).
       - ${DBT_PROJECTS_ROOT:-projects}:/projects
-      # The dbt editor's trash.
-      - execution_data:/data
+      # The dbt editor's trash, the semantic layer's warehouse login and model.
+      - portal_data:/data
+    expose: ["8000"]
+    # Declared here rather than only in the Dockerfile: Podman builds OCI images
+    # by default, and OCI images drop HEALTHCHECK.
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/api/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
 
   worker:
     <<: *backend
-    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-backend:${BACKEND_TAG:-latest}
     command: ["python", "-m", "app.worker"]
     environment:
       <<: *backend-env
-      PORTAL_SERVICES: execution
-      DATABASE_URL: postgresql+psycopg2://portal:${POSTGRES_PASSWORD}@postgres:5432/portal_execution
-      # The API container clones the project in git mode; the worker only mounts it.
+      # The backend clones the project in git mode; the worker only mounts it.
       DBT_PROJECT_GIT_URL: ""
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
     depends_on:
-      execution: { condition: service_healthy }
+      backend: { condition: service_healthy }
     volumes:
       # Where dbt runs and writes target/, logs/, dbt_packages/.
       - ${DBT_PROJECT_PATH:-workspace}:/workspace
       - ${DBT_PROJECTS_ROOT:-projects}:/projects
-    expose: []
+      # The key the backend encrypts stored credentials with.
+      - portal_data:/data
     healthcheck:
       test: ["CMD", "python", "-m", "app.worker", "--check"]
       interval: 30s
@@ -135,44 +140,12 @@ services:
       start_period: 30s
       retries: 3
 
-  insights:
-    <<: *backend
-    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-insights:${BACKEND_TAG:-latest}
-    environment:
-      <<: *backend-env
-      DBT_PROJECT_GIT_URL: ""
-    depends_on:
-      identity: { condition: service_healthy }
-      execution: { condition: service_healthy }
-    volumes:
-      # Reads what dbt runs produce (target/, edr_target/) and the warehouse login.
-      - ${DBT_PROJECT_PATH:-workspace}:/workspace:ro
-      - ${DBT_PROJECTS_ROOT:-projects}:/projects:ro
-
-  semantic:
-    <<: *backend
-    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-semantic:${BACKEND_TAG:-latest}
-    environment:
-      <<: *backend-env
-      DBT_PROJECT_GIT_URL: ""
-      CUBE_API_SECRET: "${CUBE_API_SECRET:?CUBE_API_SECRET is not set}"
-      CUBE_API_URL: http://cube:4000
-    depends_on:
-      identity: { condition: service_healthy }
-      execution: { condition: service_healthy }
-    volumes:
-      # Reads the dbt manifest and profile.
-      - ${DBT_PROJECT_PATH:-workspace}:/workspace:ro
-      - ${DBT_PROJECTS_ROOT:-projects}:/projects:ro
-      # The warehouse login and data model Cube is served.
-      - semantic_data:/data
-
   cube:
     image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-cube:${CUBE_TAG:-latest}
     restart: unless-stopped
     environment:
       CUBEJS_API_SECRET: ${CUBE_API_SECRET}
-      PORTAL_SEMANTIC_URL: http://semantic:8000
+      PORTAL_SEMANTIC_URL: http://backend:8000
     expose: ["4000"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/livez').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -185,17 +158,11 @@ services:
     image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-frontend:${FRONTEND_TAG:-latest}
     restart: unless-stopped
     depends_on:
-      identity: { condition: service_healthy }
-      execution: { condition: service_healthy }
-      insights: { condition: service_healthy }
-      semantic: { condition: service_healthy }
+      backend: { condition: service_healthy }
     ports:
       - "${PORTAL_PORT:-8080}:8080"
     environment:
-      IDENTITY_UPSTREAM: identity:8000
-      EXECUTION_UPSTREAM: execution:8000
-      INSIGHTS_UPSTREAM: insights:8000
-      SEMANTIC_UPSTREAM: semantic:8000
+      BACKEND_UPSTREAM: backend:8000
       # Optional: serve a host:port Airflow webserver under /airflow-ui/ on
       # the portal's origin (Airflow needs AIRFLOW__WEBSERVER__BASE_URL=http://<portal host>/airflow-ui).
       AIRFLOW_UPSTREAM: ${AIRFLOW_UPSTREAM:-}
@@ -205,6 +172,8 @@ services:
 
 volumes:
   postgres_data:
+  portal_data:
+  # Read once by `upgrade`: the execution and semantic services' files before 2026.11.
   execution_data:
   semantic_data:
   workspace:

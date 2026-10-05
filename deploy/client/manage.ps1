@@ -39,7 +39,7 @@ switch ($Command) {
         Need-Runtime
         Say "Containers"; Compose ps
         Say "Portal"
-        if (Test-Portal) { Ok "http://localhost:$Port answers" } else { Bad "http://localhost:$Port does not answer (.\manage.ps1 logs frontend execution)" }
+        if (Test-Portal) { Ok "http://localhost:$Port answers" } else { Bad "http://localhost:$Port does not answer (.\manage.ps1 logs frontend backend)" }
         Say "Modules (from .env)"; Show-Modules
     }
     "start" { Need-Runtime; if ($Rest.Count) { Compose start @Rest } else { Compose up -d } }
@@ -89,25 +89,22 @@ switch ($Command) {
     }
     "services" {
         @"
-  frontend    the web app and the gateway to every API (the only published port)
-  identity    sign-in, users, roles, audit trail
-  execution   dbt runs and their logs, schedules, onboarding, Airflow/Airbyte, modules
-  worker      runs the dbt jobs the execution service queues (scale: setup.ps1 -Workers N)
-  insights    Elementary, SQLFluff, profiler, assets, FinOps, Ask AI
-  semantic    the managed Cube semantic layer
-  cube        Cube itself
-  postgres    the portal's databases
+  frontend    the web app and the gateway to the API (the only published port)
+  backend     the portal API: sign-in, dbt runs and logs, schedules, editor,
+              reports, Ask AI, the semantic layer, Airflow/Airbyte, modules
+  worker      runs the dbt jobs the backend queues (scale: setup.ps1 -Workers N)
+  cube        the semantic layer engine (Cube)
+  postgres    the portal's database
   redis       job queue and live logs
+  upgrade     one-off at start: moves data from a portal before 2026.11
 "@
     }
     "reset-password" {
         Need-Runtime
         $user = if ($Rest.Count) { $Rest[0] } else { "admin" }
-        # The accounts live in the identity service (the backend on a single node).
         $ErrorActionPreference = "Continue"
-        $svc = if ((& $script:E compose config --services 2>$null) -contains "identity") { "identity" } else { "backend" }
         Say "A new password for $user"
-        & $script:E compose exec -T $svc python -m app.reset_password $user
+        & $script:E compose exec -T backend python -m app.reset_password $user
         if ($LASTEXITCODE -ne 0) { Fail "Could not reset the password (see above)." }
     }
     { $_ -in "help", "-h", "--help" } { Get-Content $PSCommandPath -TotalCount 11 | ForEach-Object { $_ -replace '^# ?', '' } }

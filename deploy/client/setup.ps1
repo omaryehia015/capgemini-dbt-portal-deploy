@@ -1,4 +1,4 @@
-# Runs the dbt Portal (microservices stack) for one dbt project on Windows,
+# Runs the dbt Portal (backend, workers, PostgreSQL, Redis) for one dbt project on Windows,
 # from the pre-built images. Needs Docker Desktop, or Podman Desktop with a
 # compose provider; no build, no Python/Node/dbt on this machine.
 #
@@ -165,7 +165,7 @@ if (-not $GitMode) {
         Set-Env DBT_PROFILES_DIR "/profiles"
         $mount = ($userDbt -replace '\\', '/') + ":/profiles:ro"
         $override = @("# Written by setup.ps1: profiles.yml comes from ~\.dbt on this machine.", "services:")
-        foreach ($svc in "execution", "worker", "insights", "semantic") { $override += "  ${svc}:", "    volumes: [""$mount""]" }
+        foreach ($svc in "backend", "worker") { $override += "  ${svc}:", "    volumes: [""$mount""]" }
         [IO.File]::WriteAllLines((Join-Path $Root "compose.override.yaml"), [string[]]$override, (New-Object Text.UTF8Encoding $false))
     }
     else { Warn "No profiles.yml found in the project or $userDbt." }
@@ -245,12 +245,12 @@ if (-not $SkipPull) {
 Say "Starting (this takes a minute on first start: databases, migrations)"
 Compose up -d --remove-orphans --scale "worker=$Workers"
 
-if (-not (Wait-Healthy $Port)) { Fail "Not up after 5 minutes. See: .\manage.ps1 status; .\manage.ps1 logs identity" }
+if (-not (Wait-Healthy $Port)) { Fail "Not up after 5 minutes. See: .\manage.ps1 status; .\manage.ps1 logs backend" }
 
 # -- 5. First sign-in ----------------------------------------------------------
 Say "Portal is up: http://localhost:$Port"
 $ErrorActionPreference = "Continue"
-$creds = (& $E compose logs identity 2>&1 | Out-String) -split "\r?\n" | Where-Object { $_.Trim() } | Select-String -Pattern "GENERATED INITIAL CREDENTIALS" -Context 0, 5
+$creds = (& $E compose logs backend 2>&1 | Out-String) -split "\r?\n" | Where-Object { $_.Trim() } | Select-String -Pattern "GENERATED INITIAL CREDENTIALS" -Context 0, 5
 if ($creds) { $creds | ForEach-Object { $_.Line; $_.Context.PostContext } } else { "No new passwords printed: the accounts already exist from an earlier run." }
 $url = "http://localhost:$Port/setup"
 $next = if ($ProjectsRoot) { "Step 2 of the Setup Assistant: pick your project from the folder you shared (or use Git)." } elseif ($GitMode) { "Step 2 of the Setup Assistant connects your dbt project (Git)." } else { "Setup Assistant: workspace, warehouse, dbt project, team." }
@@ -265,7 +265,7 @@ Write-Host "    Then:    $next"
 
 Day to day (from $Root):
   .\manage.ps1 status            # what is running, and whether it is healthy
-  .\manage.ps1 logs execution    # follow a service's log
+  .\manage.ps1 logs backend      # follow a service's log
   .\manage.ps1 doctor            # check this machine and the stack
   .\manage.ps1 help              # everything else
 "@

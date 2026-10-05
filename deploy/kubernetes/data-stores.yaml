@@ -2,16 +2,7 @@
 # For production use the platform's managed services instead (Azure Database
 # for PostgreSQL, RDS, Cloud SQL; Azure Cache for Redis, ElastiCache,
 # Memorystore): remove this file from kustomization.yaml and point
-# DATABASE_URL_* / REDIS_URL in secrets.env at them.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: dbt-portal-postgres-init
-data:
-  10-databases.sql: |
-    CREATE DATABASE portal_identity OWNER portal;
-    CREATE DATABASE portal_execution OWNER portal;
----
+# DATABASE_URL / REDIS_URL in secrets.env at them.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -41,13 +32,9 @@ spec:
             periodSeconds: 10
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql/data }
-            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { memory: 1Gi }
-      volumes:
-        - name: init
-          configMap: { name: dbt-portal-postgres-init }
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:

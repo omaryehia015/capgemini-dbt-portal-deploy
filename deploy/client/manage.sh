@@ -40,7 +40,7 @@ case "$cmd" in
         "${C[@]}" ps
         say "Portal"
         if curl -fs "http://localhost:$PORT/api/health" >/dev/null 2>&1; then ok "http://localhost:$PORT answers"
-        else bad "http://localhost:$PORT does not answer (./manage.sh logs frontend execution)"; fi
+        else bad "http://localhost:$PORT does not answer (./manage.sh logs frontend backend)"; fi
         say "Modules (from .env)"
         modules
         ;;
@@ -87,24 +87,20 @@ case "$cmd" in
         ;;
     services)
         cat <<'EOF'
-  frontend    the web app and the gateway to every API (the only published port)
-  identity    sign-in, users, roles, audit trail
-  execution   dbt runs and their logs, schedules, onboarding, Airflow/Airbyte, modules
-  worker      runs the dbt jobs the execution service queues (scale: setup.sh --workers N)
-  insights    Elementary, SQLFluff, profiler, assets, FinOps, Ask AI
-  semantic    the managed Cube semantic layer
-  cube        Cube itself
-  postgres    the portal's databases
+  frontend    the web app and the gateway to the API (the only published port)
+  backend     the portal API: sign-in, dbt runs and logs, schedules, editor,
+              reports, Ask AI, the semantic layer, Airflow/Airbyte, modules
+  worker      runs the dbt jobs the backend queues (scale: setup.sh --workers N)
+  cube        the semantic layer engine (Cube)
+  postgres    the portal's database
   redis       job queue and live logs
+  upgrade     one-off at start: moves data from a portal before 2026.11
 EOF
         ;;
     reset-password)
         need_runtime
-        # The accounts live in the identity service (the backend on a single node).
-        svc=identity
-        "${C[@]}" config --services 2>/dev/null | grep -qx identity || svc=backend
         say "A new password for ${1:-admin}"
-        "${C[@]}" exec -T "$svc" python -m app.reset_password "${1:-admin}"
+        "${C[@]}" exec -T backend python -m app.reset_password "${1:-admin}"
         ;;
     help|-h|--help) sed -n '2,13p' "$0" ;;
     *) fail "Unknown command '$cmd'. Run ./manage.sh help" ;;

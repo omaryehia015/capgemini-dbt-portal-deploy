@@ -4,17 +4,16 @@ This portal is generic. It never hard-codes a client's dbt project, warehouse
 or infrastructure, and its images carry no client-specific config. To
 onboard a new client you choose **where their dbt project lives** and
 **how it reaches the portal**, and that's it. Warehouse credentials need no
-separate setup: the services' entrypoint reads them from the client's own
+separate setup: the backend's entrypoint reads them from the client's own
 project `.env`, the file next to their `profiles.yml` that the project needs
 anyway. Pointing the stack at a project is normally the whole setup.
 
-The portal runs as separate services, each in its own container, released
-from three repos (how they fit together: [ARCHITECTURE.md](ARCHITECTURE.md)):
+The portal runs as a few containers, released from three repos (how they
+fit together: [ARCHITECTURE.md](ARCHITECTURE.md)):
 
 | Image | From | Runs |
 |---|---|---|
-| `capgemini-dbt-portal-backend` | [backend repo](https://github.com/omaryehia015/capgemini-dbt-portal-backend) | every service in one process (single node), or the **execution** API and its **workers** |
-| `capgemini-dbt-portal-identity` / `-insights` / `-semantic` | backend repo | one service each |
+| `capgemini-dbt-portal-backend` | [backend repo](https://github.com/omaryehia015/capgemini-dbt-portal-backend) | the portal API and its dbt **workers** |
 | `capgemini-dbt-portal-frontend` | [frontend repo](https://github.com/omaryehia015/capgemini-dbt-portal-frontend) | the SPA and the gateway (nginx) |
 | `capgemini-dbt-portal-cube` | [cube repo](https://github.com/omaryehia015/capgemini-dbt-portal-cube) | the semantic engine |
 
@@ -30,7 +29,7 @@ and starts everything.
 ## Fastest path: one script
 
 For a single laptop or VM, the dbt package's script runs the single-node
-portal (every backend service in one container, SQLite, no Redis):
+portal (one backend container that also runs dbt, SQLite, no Redis):
 [capgemini_dbt_core/scripts/portal.py](https://github.com/omaryehia015/capgemini_dbt_core/blob/main/scripts/portal.py).
 It is one file (Python 3.8+, standard library only) and behaves the same on Windows, macOS
 and Linux. The client needs Docker or Podman and nothing else, because dbt runs inside the
@@ -89,7 +88,7 @@ Two independent things point the portal at a specific client:
 Everything else (secrets, databases, accounts) is the same shape for every
 client and is covered in sections 5 and 6.
 
-The services resolve the project path with this precedence (unchanged from
+The backend resolves the project path with this precedence (unchanged from
 the original Streamlit portal, so client `profiles.yml`/scripts that already
 depend on it keep working): **`DBT_PROJECT_DIR`** → **`WORKSPACE_ROOT`** →
 **`PROJECT_ROOT`** → the first parent of the working directory containing
@@ -100,25 +99,25 @@ repo's [app/core/config.py](https://github.com/omaryehia015/capgemini-dbt-portal
 
 | Client's setup | Path | What runs |
 |---|---|---|
-| A team, a shared server: the normal case | [E: Client kit](#e-client-kit-microservices-compose) | the microservices stack (compose), PostgreSQL, Redis |
-| Kubernetes cluster (their own or managed) | [B: Kubernetes](#b-kubernetes) | the microservices stack, scaled per service |
-| One laptop, a demo, a very small team | [A: Single node](#a-single-node) | one backend container (all services), SQLite |
-| You, developing across the repos | [F: From source](#f-from-source-the-three-repos-side-by-side) | the microservices stack, built locally |
+| A team, a shared server: the normal case | [E: Client kit](#e-client-kit-compose) | backend + workers (compose), PostgreSQL, Redis |
+| Kubernetes cluster (their own or managed) | [B: Kubernetes](#b-kubernetes) | backend + workers, workers scaled for dbt runs |
+| One laptop, a demo, a very small team | [A: Single node](#a-single-node) | one backend container that also runs dbt, SQLite |
+| You, developing across the repos | [F: From source](#f-from-source-the-three-repos-side-by-side) | backend + workers, built locally |
 | dbt project already ships as a container image | [C: Bake the project into the image](#c-bake-the-project-into-the-image) | either of the above, with a baked backend image |
 | Plain Linux VM, no containers allowed | [D: Bare VM (systemd + nginx)](#d-bare-vm-systemd--nginx) | single node, no semantic engine |
 
 All of them run the same code and read the same environment variables
 (section 6). They differ in how those variables are set, how the project's
-files reach `/workspace`, and whether the services run together or apart.
+files reach `/workspace`, and whether dbt runs in the backend or on workers.
 
-**Single node or microservices?** Both run the same images. The single-node
-setup keeps every backend service in one process on SQLite: simple, but one
-heavy dbt run shares CPU with every user's page loads, and it cannot scale
-past one container. The microservices stack runs dbt on separate **workers**
-behind a job queue, keeps users and history in PostgreSQL, and lets each
-service scale on its own. Use it for anything more than one or two users. An
-existing single-node portal moves over with its data: see
-[section 9, "From single node to microservices"](#from-single-node-to-microservices).
+**Single node or backend + workers?** Both run the same image. The single-node
+setup runs dbt inside the backend on SQLite: simple, but one heavy dbt run
+shares CPU with every user's page loads, and it cannot scale past one
+container. The full stack (`compose.yaml`) runs dbt on separate **workers**
+behind a job queue and keeps users and history in PostgreSQL. Use it for
+anything more than one or two users. An existing single-node portal moves
+over with its data: see
+[section 9, "From single node to the full stack"](#from-single-node-to-the-full-stack).
 
 ### How the client's dbt project gets into the containers (any path)
 
@@ -130,10 +129,9 @@ Three interchangeable options; pick one per client:
   deploys dbt this way (e.g. an existing Airflow worker image with the
   project on a shared volume).
 - **Git**: set `DBT_PROJECT_GIT_URL` (+ `DBT_PROJECT_GIT_REF`, and
-  `DBT_PROJECT_GIT_TOKEN` for private repos). The execution container's
+  `DBT_PROJECT_GIT_TOKEN` for private repos). The backend container's
   entrypoint clones it on first start and fast-forwards it on every restart;
-  the other services mount the same volume (workers read-write, insights and
-  semantic read-only). Best default for a client with a git repo and no
+  the workers mount the same volume. Best default for a client with a git repo and no
   existing deployment pattern.
 - **Bake**: the project is `COPY`'d into the backend image at build time
   ([deploy/bake/Dockerfile](../deploy/bake/Dockerfile)). Best when the client
@@ -145,7 +143,7 @@ is a sub-folder of what got mounted/cloned/baked).
 
 ---
 
-### E. Client kit (microservices, compose)
+### E. Client kit (compose)
 
 The deliverable for a client: the published images, [compose.yaml](../compose.yaml),
 [.env.example](../.env.example), [releases.yml](../releases.yml) and the setup
@@ -167,7 +165,7 @@ install is:
 ```bash
 cp .env.example .env     # set DBT_PROJECT_PATH (or the git block) and the four secrets
 docker compose up -d
-docker compose logs identity | grep -A6 "GENERATED INITIAL CREDENTIALS"
+docker compose logs backend | grep -A6 "GENERATED INITIAL CREDENTIALS"
 ```
 
 No source checkout, no build, no Python/Node/dbt on their machine. If their
@@ -175,7 +173,17 @@ infrastructure is Kubernetes, use path B with the same image tags.
 
 **Scaling on one host.** `docker compose up -d --scale worker=3` runs three
 dbt workers (each runs `WORKER_CONCURRENCY` jobs at once, 4 by default).
-Everything else is sized for a team as is; for more, move to Kubernetes.
+Everything else is sized for a team as is.
+
+**Upgrading from 2026.10 or earlier** (when identity, execution, insights and
+semantic ran as separate containers): run `setup.sh --release <newer>` as
+usual. On the first start the one-off `upgrade` container
+([postgres/upgrade.sh](../postgres/upgrade.sh)) copies the `portal_identity`
+and `portal_execution` databases into the one `portal` database, and the
+`execution_data`/`semantic_data` volumes into `portal_data`, before the
+backend starts (`docker compose logs upgrade` shows it). The old databases and
+volumes are kept; drop them once the portal works:
+`docker compose exec postgres psql -U portal -d portal -c 'DROP DATABASE portal_identity' -c 'DROP DATABASE portal_execution'`.
 
 **Publishing images.** Each repo publishes its own: `git tag v1.4.0 && git
 push --tags` in that repo builds, scans and pushes `1.4.0`, `1.4` and `latest`
@@ -186,7 +194,7 @@ read-only token, or `docker compose pull` fails with a 401.
 
 ### A. Single node
 
-Every backend service in one container, SQLite, no Redis: the
+One backend container that also runs dbt, SQLite, no Redis: the
 [portal.py script](#fastest-path-one-script) does this per project, or by hand:
 
 ```bash
@@ -226,8 +234,8 @@ docker compose -f compose.yaml -f compose.build.yaml up --build -d
 
 [compose.build.yaml](../compose.build.yaml) builds every image from the
 sibling checkouts instead of pulling them. For a quicker loop on one repo,
-see that repo's README (the backend runs every service with `uvicorn
-app.main:app`; the frontend's `npm run dev` proxies to it).
+see that repo's README (the backend runs with `uvicorn app.main:app`; the
+frontend's `npm run dev` proxies to it).
 
 ### B. Kubernetes
 
@@ -239,35 +247,39 @@ cp secrets.env.example secrets.env      # secrets, database/Redis URLs, warehous
 $EDITOR portal.env                      # DBT_PROJECT_GIT_URL/REF, DBT_TARGET
 $EDITOR kustomization.yaml              # image tags: one release from releases.yml
 kubectl apply -k .
-kubectl -n dbt-portal logs deploy/dbt-portal-identity | grep -A6 "GENERATED INITIAL CREDENTIALS"
+kubectl -n dbt-portal logs deploy/dbt-portal-backend | grep -A6 "GENERATED INITIAL CREDENTIALS"
 ```
 
 Notes specific to Kubernetes:
 
-- **What scales.** identity, insights, the execution API and the frontend are
-  stateless: raise `replicas` freely. dbt runs on the **worker** Deployment;
-  add workers for more concurrent runs. semantic runs one replica (it writes
-  the Cube model as files); Cube itself is stateless.
+- **What scales.** dbt runs on the **worker** Deployment; add workers for
+  more concurrent runs. The backend runs one replica (it keeps the Cube model
+  and the credentials key as files on a ReadWriteOnce volume); the frontend
+  and Cube are stateless.
 - **PostgreSQL and Redis.** [data-stores.yaml](../deploy/kubernetes/data-stores.yaml)
   runs one pod of each so the stack works anywhere. For production, use the
   platform's managed services: drop the file from `kustomization.yaml` and set
-  `DATABASE_URL_IDENTITY`, `DATABASE_URL_EXECUTION` and `REDIS_URL` in
-  `secrets.env`. Create the `portal_identity` and `portal_execution`
-  databases there first ([postgres/init-databases.sql](../postgres/init-databases.sql)).
+  `DATABASE_URL` and `REDIS_URL` in `secrets.env` (one empty database).
 - **Project source.** The workspace is one `ReadWriteMany` volume
-  ([workspace.yaml](../deploy/kubernetes/workspace.yaml)): the execution API
-  clones into it in git mode, workers run dbt in it, insights and semantic
-  read it. Pods spread over several nodes need an RWX storage class (Azure
+  ([workspace.yaml](../deploy/kubernetes/workspace.yaml)): the backend
+  clones into it in git mode and reads it, workers run dbt in it. Pods spread over several nodes need an RWX storage class (Azure
   Files, EFS, Filestore, NFS); a single-node cluster can use RWO.
 - **`profiles.yml` as a Secret** instead of committed with `env_var()`:
   `kubectl create secret generic dbt-profiles --from-file=profiles.yml -n dbt-portal`,
-  mount it at `/etc/dbt` in the execution, worker, insights and semantic
-  Deployments, and set `DBT_PROFILES_DIR=/etc/dbt` in `portal.env`.
+  mount it at `/etc/dbt` in the backend and worker Deployments, and set `DBT_PROFILES_DIR=/etc/dbt` in `portal.env`.
 - **Ingress** in `ingress.yaml` is an ingress-nginx example; adapt to the
   client's ingress controller. No ingress available yet? `kubectl port-forward
   svc/dbt-portal-frontend 8080:8080` and open `http://localhost:8080`.
 - **Images**: mirror them to the client's registry if needed and set
   `newName`/`newTag` in `kustomization.yaml`'s `images:` block.
+- **Upgrading from 2026.10 or earlier** (separate identity/execution/insights/
+  semantic Deployments): scale the old Deployments to 0, then run
+  [postgres/upgrade.sh](../postgres/upgrade.sh) once in a pod with the
+  postgres image and `POSTGRES_PASSWORD` set, with `PGHOST` pointing at the
+  database, before applying the new manifests (it copies `portal_identity`
+  and `portal_execution` into `portal`). The semantic layer's warehouse login
+  and model were on the old semantic volume: set them up again on the
+  Semantic Modeling page.
 
 ### C. Bake the project into the image
 
@@ -282,11 +294,9 @@ docker build -f deploy/bake/Dockerfile \
   -t registry.client.com/analytics/dbt-portal-backend:2.3.0 .
 ```
 
-Then use that image for the execution and worker containers (or the single
-backend container) with **no** `DBT_PROJECT_PATH`/`DBT_PROJECT_GIT_URL` set:
-the project is already at `/workspace`. Insights and semantic read the
-project too, so bake it into their images the same way (`PORTAL_BACKEND_IMAGE`
-= the insights or semantic image).
+Then use that image for the backend and worker containers with **no**
+`DBT_PROJECT_PATH`/`DBT_PROJECT_GIT_URL` set: the project is already at
+`/workspace`.
 
 ### D. Bare VM (systemd + nginx)
 
@@ -327,33 +337,22 @@ For git-mode auto-update on this path, run the backend's
 `docker-entrypoint.sh` clone/fetch logic yourself in a cron job or a `git
 pull` step in your deploy script: the systemd unit doesn't run it.
 
-## 3. Cross-cutting: how requests reach each service
+## 3. Cross-cutting: how requests reach the backend
 
 The frontend container is the gateway. Its nginx
 ([nginx/default.conf.template](https://github.com/omaryehia015/capgemini-dbt-portal-frontend/blob/main/nginx/default.conf.template))
-serves the SPA and routes each `/api` prefix to the service that owns it:
+serves the SPA and proxies `/api` (including the job log WebSocket) to
+`BACKEND_UPSTREAM` (default `backend:8000`). Per deployment:
 
-| Prefix | Service | Upstream variable |
-|---|---|---|
-| `/api/auth`, `/api/governance` | identity | `IDENTITY_UPSTREAM` |
-| `/api/elementary`, `/api/sqlfluff`, `/api/profiler`, `/api/assets`, `/api/finops`, `/api/insights`, `/api/ask-ai` | insights | `INSIGHTS_UPSTREAM` |
-| `/api/semantic` | semantic | `SEMANTIC_UPSTREAM` |
-| everything else under `/api`, including the job log WebSocket | execution | `EXECUTION_UPSTREAM` |
-
-Each defaults to `BACKEND_UPSTREAM` (default `backend:8000`), so a single-node
-install sets nothing. Per deployment:
-
-- Compose: [compose.yaml](../compose.yaml) sets all four to the service names.
-- Kubernetes: [frontend.yaml](../deploy/kubernetes/frontend.yaml) sets them to the Service names.
+- Compose: both compose files use the default (`backend:8000`).
+- Kubernetes: [frontend.yaml](../deploy/kubernetes/frontend.yaml) sets it to `dbt-portal-backend:8000`.
 - Bare VM: [deploy/vm/nginx-dbt-portal.conf](../deploy/vm/nginx-dbt-portal.conf)
   proxies everything to `127.0.0.1:8000` (one process).
 - Local frontend development (`npm run dev`): Vite's dev proxy sends `/api`
   to `VITE_API_PROXY_TARGET` (default `http://127.0.0.1:8123`), an all-in-one backend.
 
-Services call each other only on their `/internal` API (never proxied by the
-gateway), authenticated with a short-lived token signed with the shared
-`JWT_SECRET`. Cube reads its configuration from the semantic service's
-`/internal/cube` API with `CUBE_API_SECRET`. Both are covered in
+Cube reads its configuration from the backend's `/internal/cube` API
+(never proxied by the gateway) with `CUBE_API_SECRET`; see
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## 4. Warehouse credentials and the dbt profile
@@ -422,7 +421,7 @@ Where `profiles.yml` lives:
 3. `~/.dbt/profiles.yml` inside the container.
 
 **A different warehouse** (BigQuery, Redshift, Postgres, Databricks, ...):
-add that adapter to the backend image (execution, workers, single node) with the `EXTRA_PIP_PACKAGES` build arg
+add that adapter to the backend image (backend, workers, single node) with the `EXTRA_PIP_PACKAGES` build arg
 — `podman build --build-arg EXTRA_PIP_PACKAGES="dbt-bigquery~=1.8.0" .` in the backend repo
 (compose.build.yaml: set `EXTRA_PIP_PACKAGES` in `.env`) — and write `profiles.yml`
 accordingly. `snowflake.py`'s pages will no-op for non-Snowflake clients
@@ -435,14 +434,14 @@ overrides the profile's own `target:` key without touching the file.
 
 Four seeded roles (Admin, Data Engineer, Data Analyst, Auditor; see the
 backend's [app/db/seed.py](https://github.com/omaryehia015/capgemini-dbt-portal-backend/blob/main/app/db/seed.py))
-exist from first start, stored in the identity service's database, editable
+exist from first start, stored in the portal database, editable
 afterward from the Governance page.
 
 - `ENVIRONMENT=production` (the default) generates a random password per
-  account and prints it once in the identity log (`docker compose logs
-  identity`, `kubectl logs deploy/dbt-portal-identity`; on a single node, the
-  backend log). Capture it there, or pre-set `SEED_ADMIN_PASSWORD` etc. before
-  first start. The identity service refuses to start if one of those is set
+  account and prints it once in the backend log (`docker compose logs
+  backend`, `kubectl logs deploy/dbt-portal-backend`). Capture it there, or
+  pre-set `SEED_ADMIN_PASSWORD` etc. before first start. The backend refuses
+  to start if one of those is set
   to a documented demo password.
 - `ENVIRONMENT=development` seeds the documented passwords (`admin123!` etc.):
   for a local demo only, never for anything a client can reach.
@@ -489,8 +488,8 @@ different command.
 
    On Linux with Docker Engine (not Desktop), `host.docker.internal` needs
    `extra_hosts: ["host.docker.internal:host-gateway"]` on the backend
-   execution service — or use the server's hostname/IP directly in `AIRBYTE_URL`.
-   Then `docker compose up -d execution`.
+   service — or use the server's hostname/IP directly in `AIRBYTE_URL`.
+   Then `docker compose up -d backend`.
 
 3. **Check it** on **Tools & Services** (sidebar → Workspace): the Airbyte
    card turns green once the URL is reachable and the credentials work. The
@@ -514,18 +513,17 @@ here by what they control; the backend's `app/core/config.py`,
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PORTAL_SERVICES` | the image's service (`all` for the backend image) | Which services this container serves: `all`, or a comma list of `identity`, `execution`, `insights`, `semantic`. |
-| `IDENTITY_URL` / `EXECUTION_URL` / `INSIGHTS_URL` / `SEMANTIC_URL` | — | Where the services a container does not host are reached (`http://identity:8000` ...). Required for every service a container calls but does not host. |
+| `EXECUTION_ROLE` | `all` | `api` (with `REDIS_URL`): the backend queues dbt runs for the workers instead of running them. Set in `compose.yaml` and `backend.yaml`. |
 | `EXECUTION_ROLE` | `all` | Execution only. `api`: serve the API and queue dbt jobs for workers (needs `REDIS_URL`). `all`: run jobs in-process (single node). Workers run `python -m app.worker`. |
 | `WORKER_CONCURRENCY` | `4` | dbt jobs one worker runs at once. |
 | `REDIS_URL` | — | Job queue, live job logs across replicas, cache invalidation, email sign-in codes. Unset: all in-process (single node only). |
-| `DATABASE_URL` | `sqlite:////data/portal.db` | This service's database. identity → `portal_identity`, execution and workers → `portal_execution` (`postgresql+psycopg2://...`). SQLite is for a single node. Schema changes are applied on start (Alembic). |
+| `DATABASE_URL` | `sqlite:////data/portal.db` | The portal database (`postgresql+psycopg2://.../portal`), the same for backend and workers. SQLite is for a single node. Schema changes are applied on start (Alembic). |
 | `JWT_SECRET` | generated (single node only) | Session signing key, the same for every service. Also signs service-to-service calls. |
-| `CUBE_API_SECRET` | generated (single node only) | Shared by the semantic service and Cube (Cube's `CUBEJS_API_SECRET`). |
-| `CUBE_API_URL` | `http://cube:4000` | Where the semantic service reaches Cube. |
-| `PORTAL_SEMANTIC_URL` | `http://semantic:8000` | Cube container: where it reads its configuration (single node: `http://backend:8000`). |
-| `IDENTITY_UPSTREAM` / `EXECUTION_UPSTREAM` / `INSIGHTS_UPSTREAM` / `SEMANTIC_UPSTREAM` / `BACKEND_UPSTREAM` | `backend:8000` | Frontend container: where the gateway sends each `/api` prefix (section 3). |
-| `PORTAL_DATA_DIR` | `/data` in the images | Files a service keeps outside its database: the semantic layer's state, the dbt editor's trash, a single node's SQLite file. |
+| `CUBE_API_SECRET` | generated (single node only) | Shared by the backend and Cube (Cube's `CUBEJS_API_SECRET`). |
+| `CUBE_API_URL` | `http://cube:4000` | Where the backend reaches Cube. |
+| `PORTAL_SEMANTIC_URL` | `http://semantic:8000` | Cube container: where it reads its configuration (`http://backend:8000` in both compose files). |
+| `BACKEND_UPSTREAM` | `backend:8000` | Frontend container: where the gateway sends `/api` (section 3). |
+| `PORTAL_DATA_DIR` | `/data` in the images | Files the backend keeps outside its database: the semantic layer's state, the dbt editor's trash, the stored-credentials key, a single node's SQLite file. |
 | `BACKEND_TAG` / `FRONTEND_TAG` / `CUBE_TAG` / `IMAGE_REGISTRY` | `latest` / `ghcr.io/omaryehia015` | Compose: which images to run. Take them from one release in `releases.yml`. |
 
 **The dbt project and the warehouse:**
@@ -534,11 +532,11 @@ here by what they control; the backend's `app/core/config.py`,
 |---|---|---|
 | `DBT_PROJECT_DIR` / `WORKSPACE_ROOT` / `PROJECT_ROOT` | walk-up from cwd | Where the dbt project is, in that precedence order. Compose sets `DBT_PROJECT_DIR=/workspace` for you. |
 | `DBT_PROJECT_PATH` | — | Compose-only: host path mounted at `/workspace` (mount mode). |
-| `DBT_PROJECT_GIT_URL` | — | Git mode: repo the execution container clones into the workspace. |
+| `DBT_PROJECT_GIT_URL` | — | Git mode: repo the backend container clones into the workspace. |
 | `DBT_PROJECT_GIT_REF` | `main` | Branch/tag to clone and track. |
 | `DBT_PROJECT_GIT_TOKEN` / `DBT_PROJECT_GIT_USERNAME` | — | Auth for a private repo (HTTPS). Username defaults to `x-access-token` (GitHub PAT); use `oauth2` for GitLab. |
 | `DBT_PROJECT_SUBDIR` | — | dbt project is a sub-folder of the mount/clone (monorepo). |
-| `DBT_DEPS_ON_START` | `false` | Run `dbt deps` in the entrypoint before the server starts (execution / single node). |
+| `DBT_DEPS_ON_START` | `false` | Run `dbt deps` in the entrypoint before the server starts (backend). |
 | `DBT_PROFILES_DIR` | project root, then `~/.dbt` | Where `profiles.yml` lives, if not the project root. |
 | `DBT_EXECUTABLE_PATH` | auto-detected | Explicit path to the `dbt` binary; only needed for an unusual layout. |
 | `DBT_TARGET` | profile's own `target:` | Which `profiles.yml` output to run against. |
@@ -562,19 +560,19 @@ here by what they control; the backend's `app/core/config.py`,
 | Variable | Default | Purpose |
 |---|---|---|
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | Logging. `json` writes one object per line with a `request_id`; `text` is easier to read on a laptop. |
-| `METRICS_ENABLED` | `true` | Prometheus metrics at `/metrics` on each service's port (not proxied by the gateway, so internal only). |
+| `METRICS_ENABLED` | `true` | Prometheus metrics at `/metrics` on the backend's port (not proxied by the gateway, so internal only). |
 | `SCHEDULER_ENABLED` | `true` | Fire dbt Runner schedules. Runs on the workers (or the single node); safe with several, each slot is claimed once in the database. |
 | `NOTIFY_SLACK_WEBHOOK` / `NOTIFY_TEAMS_WEBHOOK` / `NOTIFY_EMAIL_TO` | — | Default failure-alert channels. Admins can change them at runtime (Governance → Failure alerts); the stored values win. |
 | `PORTAL_BASE_URL` | — | Public URL of the portal, so alerts link straight to the failed run. |
 | `AIRFLOW_URL` / `AIRFLOW_WEBSERVER_URL` | — | Default URL shown on the Airflow page; users can still enter one at runtime. |
 | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | — | Service account for the Airflow REST API (with `AIRFLOW_URL`): DAG list, recent runs, trigger, pause. Without them the Airflow page only probes `/health` and embeds the UI. |
 | `AIRFLOW_UPSTREAM` | — | Frontend container: `host:port` of an Airflow webserver to serve under `/airflow-ui/` on the portal's origin, so the Airflow page can embed it (a cross-site iframe loses Airflow's session cookie and its login fails with "CSRF session token is missing"). Airflow must run with `AIRFLOW__WEBSERVER__BASE_URL=http://<portal host>/airflow-ui`. |
-| `AIRBYTE_URL` | — | Airbyte root the execution service calls (section 5a): `http://host.docker.internal:8000` for `abctl` on the same host, `https://api.airbyte.com/v1` for Airbyte Cloud. Unset = the Airbyte page shows the install steps. |
+| `AIRBYTE_URL` | — | Airbyte root the backend calls (section 5a): `http://host.docker.internal:8000` for `abctl` on the same host, `https://api.airbyte.com/v1` for Airbyte Cloud. Unset = the Airbyte page shows the install steps. |
 | `AIRBYTE_CLIENT_ID` / `AIRBYTE_CLIENT_SECRET` | — | API application credentials (`abctl local credentials`, or an Airbyte Cloud application). Only omit for an install with auth disabled. |
 | `AIRBYTE_WORKSPACE_ID` | all workspaces | Limit the Airbyte page to one workspace. |
 | `AIRBYTE_UI_URL` | derived from `AIRBYTE_URL` | The Airbyte UI link users' browsers open, when it differs from the URL the backend uses. |
 | `COLIBRI_DIST_DIR` | auto-discovered | Override where the Colibri static report is found. |
-| `PREFLIGHT_ON_START` | `true` | Set `false` to skip the entrypoint's preflight checks (they run in the execution and single-node containers). |
+| `PREFLIGHT_ON_START` | `true` | Set `false` to skip the entrypoint's preflight checks (they run in the backend container). |
 | `PREFLIGHT_STRICT` | `false` | `true` refuses to start the container when preflight finds a failure (vs. warning and starting anyway). |
 | `PORTAL_CA_CERTS` | `<project>/.certs/` | Corporate root CA(s) for a proxy that inspects TLS (Zscaler, Netskope...): a PEM file or a folder of `*.pem`/`*.crt`. The entrypoint adds them to the public roots and points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` at the merged bundle. Symptom without it: `CERTIFICATE_VERIFY_FAILED ... self-signed certificate in certificate chain` from the AI providers or `dbt deps`. An explicit `SSL_CERT_FILE` wins. |
 
@@ -584,12 +582,12 @@ here by what they control; the backend's `app/core/config.py`,
 project, the profile/target/adapter, and warehouse env vars:
 
 ```bash
-# Compose (microservices or single node)
-docker compose run --rm --no-deps execution python -m app.preflight
+# Compose (full stack or single node)
+docker compose run --rm --no-deps backend python -m app.preflight
 docker compose -f compose.single.yaml run --rm --no-deps backend python -m app.preflight
 
 # Kubernetes
-kubectl exec -n dbt-portal deploy/dbt-portal-execution -- python -m app.preflight
+kubectl exec -n dbt-portal deploy/dbt-portal-backend -- python -m app.preflight
 
 # Bare VM
 .venv/bin/python -m app.preflight
@@ -597,14 +595,14 @@ kubectl exec -n dbt-portal deploy/dbt-portal-execution -- python -m app.prefligh
 # add --dbt-debug to also test the actual warehouse login (`dbt debug`)
 ```
 
-It also runs on every start of the execution (or single-node) container, and
+It also runs on every start of the backend container, and
 its output is the first thing to check in its log when something's wrong.
 Example output:
 
 ```
 [OK  ] environment: production
 [OK  ] JWT_SECRET: set
-[OK  ] portal database: postgresql+psycopg2://portal:***@postgres:5432/portal_execution
+[OK  ] portal database: postgresql+psycopg2://portal:***@postgres:5432/portal
 [OK  ] dbt project: capgemini_dbt_core at /workspace
 [OK  ] dbt executable: /opt/venv/bin/dbt
 [OK  ] dbt profile: default.dev (snowflake) from /workspace/profiles.yml
@@ -636,20 +634,20 @@ Preflight: passed
 5. Pick one release from `releases.yml` and use its three tags everywhere.
 6. Run preflight (section 7) and fix everything it flags.
 7. Start the stack, confirm section 7's post-start checks.
-8. Capture the generated admin password from the identity log (or set
+8. Capture the generated admin password from the backend log (or set
    `SEED_*_PASSWORD` beforehand) and hand it to the client through your normal
    secret-sharing channel, not a repo.
 
 ## 9. Operating the portal
 
-**Logs.** Every service writes one JSON object per line to stdout: `ts`,
+**Logs.** The backend and workers write one JSON object per line to stdout: `ts`,
 `level`, `logger`, `msg`, a `request_id` for anything that happened during an
 HTTP request, and context fields (`job_id`, `kind`, `status`, `duration_ms` ...).
 Every response carries the same id in `X-Request-ID`, so a user's error
 report can be matched to its log lines. Set `LOG_FORMAT=text` for a laptop.
-dbt runs log in the **worker**; the API that queued them in **execution**.
+dbt runs log in the **worker**; the API that queued them in **backend**.
 
-**Metrics.** `GET /metrics` on each service's port (not through the gateway)
+**Metrics.** `GET /metrics` on the backend's port 8000 (not through the gateway)
 serves Prometheus metrics: `portal_http_requests_total` and
 `portal_http_request_duration_seconds` by route template,
 `portal_jobs_started_total`, `portal_jobs_finished_total{status}`,
@@ -660,8 +658,8 @@ the usual `prometheus.io/*` scrape annotations.
 
 **Scaling.** Add workers for more concurrent dbt runs (`--scale worker=N`,
 or the worker Deployment's replicas); each takes up to `WORKER_CONCURRENCY`
-jobs. identity, insights, the execution API and the frontend are stateless and
-scale freely. A job request waits up to 20 seconds for a worker; with none
+jobs. The frontend and Cube are stateless and scale freely; the backend runs
+one replica unless its `/data` is on a ReadWriteMany volume. A job request waits up to 20 seconds for a worker; with none
 running, the page says "No execution worker picked up the job".
 
 **Schedules.** On the dbt Runner page, build a command, then *Schedules → Add
@@ -675,33 +673,31 @@ webhooks, email recipients, and whether warnings and manual runs alert too.
 *Send test alert* checks each channel. Webhook URLs are never shown again
 after saving; the page displays a masked form.
 
-**Restarts.** Running jobs are written to the execution database and kept
+**Restarts.** Running jobs are written to the portal database and kept
 alive by the worker's heartbeat. If a worker stops, its jobs are marked failed
 with "Interrupted" (right away on a clean shutdown, within about 2.5 minutes
-after a crash). Live logs and *Cancel* work from any execution replica (Redis).
-Sessions, lockouts and accounts are in the identity database; a user disabled
-there is refused by every service within 10 seconds.
+after a crash). Live logs and *Cancel* go through Redis, so they keep
+working across backend restarts.
 
 **Upgrades.** Pick a newer release in `releases.yml`, then
 `./setup.sh <project> --release <name>` (or set the three tags in `.env` and
-`docker compose up -d`). Schema changes are applied by each service on start;
+`docker compose up -d`). Schema changes are applied by the backend on start;
 several replicas starting together take turns (a PostgreSQL advisory lock).
 
-### From single node to microservices
+### From single node to the full stack
 
 The single-node portal kept everything in one SQLite file. Move it into the
-microservices stack's databases once, then keep using the new stack:
+full stack's PostgreSQL database once, then keep using the new stack:
 
 ```bash
 # 1. Stop the old portal and find its data volume (portal.py: capgemini-portal-<slug>-<sha6>-data)
 docker volume ls | grep -- -data
 
-# 2. Start the new stack's databases and services once, so the schemas exist
-docker compose up -d postgres redis identity execution
+# 2. Start the new stack's database and backend once, so the schema exists
+docker compose up -d postgres redis backend
 
-# 3. Copy the tables each service owns (users/roles/audit/sessions; run history/schedules/alerts)
-docker compose run --rm --no-deps -v <old-data-volume>:/old:ro identity  python -m app.db.import_sqlite /old/portal.db
-docker compose run --rm --no-deps -v <old-data-volume>:/old:ro execution python -m app.db.import_sqlite /old/portal.db
+# 3. Copy the tables (users/roles/audit/sessions, run history/schedules/alerts)
+docker compose run --rm --no-deps -v <old-data-volume>:/old:ro backend python -m app.db.import_sqlite /old/portal.db
 
 # 4. Start everything
 docker compose up -d

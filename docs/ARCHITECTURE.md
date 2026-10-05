@@ -1,112 +1,93 @@
 # Architecture
 
-The portal is four backend services, a gateway and a semantic engine. Each
-runs in its own container, and each container scales and is released on its
-own. This page explains what each one owns, how they talk to each other, and
-what that means when you run or change them.
+The portal is one backend (the API), its dbt workers, a gateway and a
+semantic engine, with PostgreSQL and Redis. This page explains what each
+container owns, how they talk to each other, and what that means when you run
+or change them.
 
 ```mermaid
 flowchart LR
   B[Browser] --> G["frontend<br/>SPA + gateway (nginx)"]
-  G -- "/api/auth, /api/governance" --> I[identity]
-  G -- "/api/jobs, /api/dbt, ... + WebSocket" --> E["execution API"]
-  G -- "/api/elementary, /api/finops, ..." --> N[insights]
-  G -- "/api/semantic" --> S[semantic]
-  E -- "job queue" --> R[(Redis)]
+  G -- "/api + job log WebSocket" --> A["backend<br/>the portal API"]
+  A -- "job queue" --> R[(Redis)]
   R -- "jobs, live logs, cancel" --> W["worker(s)<br/>run dbt"]
-  E & W & N & S -. "/internal: users, audit" .-> I
-  N -. "/internal: run history" .-> E
-  C[Cube] -- "/internal/cube: login + model" --> S
-  S -- "queries" --> C
-  I --> PI[(PostgreSQL<br/>portal_identity)]
-  E & W --> PE[(PostgreSQL<br/>portal_execution)]
-  W & E --- WS[/"dbt project<br/>(workspace volume)"/]
-  N & S -. read-only .- WS
+  C[Cube] -- "/internal/cube: login + model" --> A
+  A -- "queries" --> C
+  A & W --> P[(PostgreSQL<br/>portal)]
+  W & A --- WS[/"dbt project<br/>(workspace volume)"/]
 ```
 
-## Services
+## Containers
 
-| Service | Image | Owns | Reads | Scales |
+| Container | Image | Owns | Reads | Scales |
 |---|---|---|---|---|
-| **identity** | `-identity` | users, roles, policies, sessions, sign-in lockouts, the audit trail (`portal_identity`) | — | stateless, any number |
-| **execution** (API) | `-backend`, `EXECUTION_ROLE=api` | run history, schedules, alert settings (`portal_execution`); the dbt editor | the dbt project (read-write) | stateless, any number |
+| **backend** | `-backend`, `EXECUTION_ROLE=api` | users, roles, sessions, audit trail, run history, schedules, alert settings (PostgreSQL); the dbt editor; the Cube warehouse login and data model (`/data/cube`) | the dbt project (read-write), its artifacts, the warehouse | one (more with a ReadWriteMany `/data`) |
 | **worker** | `-backend`, `python -m app.worker` | the dbt processes; fires schedules | the dbt project (read-write) | one per N concurrent jobs |
-| **insights** | `-insights` | nothing (caches only) | the dbt project's artifacts (read-only), the warehouse | stateless, any number |
-| **semantic** | `-semantic` | the Cube warehouse login and data model (`/data/cube`) | the dbt manifest and profile (read-only) | one |
-| **cube** | `-cube` | nothing | its configuration, from semantic | any number |
+| **cube** | `-cube` | nothing | its configuration, from the backend | any number |
 | **frontend** | `-frontend` | nothing | — | any number |
+| **postgres**, **redis** | public images | the database; the job queue and live logs | — | one (or the platform's managed services) |
 
-Which routes belong to which service is defined once, in the backend repo's
-[app/core/services.py](https://github.com/omaryehia015/capgemini-dbt-portal-backend/blob/main/app/core/services.py);
-the gateway's routing table (frontend repo, `nginx/default.conf.template`)
-mirrors it.
+**One image.** The backend and the workers are the same image
+(`capgemini-dbt-portal-backend`); the command and `EXECUTION_ROLE` decide
+which one a container is. Without `EXECUTION_ROLE=api` and Redis, the backend
+runs dbt itself: that is the single-node portal (`compose.single.yaml`,
+SQLite), and what developers run locally.
 
-**One codebase, many images.** The four backend services share one
-repository and one Python package. `PORTAL_SERVICES` decides which routers a
-container mounts and which tables it migrates; the Dockerfile's `SERVICE`
-build arg decides which dependencies the image carries (only the backend
-image has dbt). `PORTAL_SERVICES=all` runs everything in one process: that
-is the single-node portal, and what developers run locally.
+Inside, the code is still organised as four areas (identity, execution,
+insights, semantic), defined in the backend repo's
+[app/core/services.py](https://github.com/omaryehia015/capgemini-dbt-portal-backend/blob/main/app/core/services.py).
+Up to release 2026.10 each ran as its own container, and the code can still
+run them apart (`PORTAL_SERVICES`, `*_URL`), but no deployment here does.
 
-## How services talk to each other
+## How the containers talk to each other
 
-**Browser to services: the gateway.** The browser only ever talks to the
-frontend container. Its nginx routes each `/api` prefix to one service. The
-session is an httpOnly cookie, and every service verifies it the same way:
-each one has the same `JWT_SECRET`.
+**Browser to backend: the gateway.** The browser only ever talks to the
+frontend container. Its nginx serves the SPA and proxies `/api` (including
+the job log WebSocket) to the backend. The session is an httpOnly cookie
+signed with `JWT_SECRET`. The gateway does not proxy `/internal`, so a browser
+cannot reach it.
 
-**Service to service: `/internal`.** When a service needs another one, it
-calls that service's `/internal/...` HTTP API with a 60-second token signed
-with `JWT_SECRET` and marked `scope: internal`. A login token is never
-accepted there and an internal token is never accepted as a login. The
-gateway does not proxy `/internal`, so a browser cannot reach it. The calls:
-
-| Caller | Calls | Why |
-|---|---|---|
-| every service | identity `GET /internal/identity/users/{name}` | the signed-in user's current role and permissions, cached 10 s (a disabled user is refused everywhere within 10 s) |
-| every service | identity `POST /internal/identity/audit` | audit events; kept and retried if identity is briefly unreachable |
-| insights | execution `GET /internal/execution/jobs` | recent runs, for the home page's recommendations |
-| execution | semantic `GET /internal/semantic/status` | the Tools page's Cube card |
-| cube | semantic `GET /internal/cube/{state,connection,model}` | its warehouse login and data model (below) |
-
-In-process, the same calls are plain function calls: the code goes through
-`app/clients/`, which checks whether the other service is hosted in this
-process.
-
-**Jobs: Redis.** The execution API never runs dbt. It pushes a job request
-onto a Redis list and waits (up to 20 s) for a worker's reply, which is the
-job's first status, or why it could not start. The worker builds the plan
-(reading the dbt project), runs it, and appends every log line and the final
-status to a Redis stream for that job. Any execution replica can then serve
-the job's live log over the WebSocket, and *Cancel* is a message on a Redis
-channel that the worker running the job acts on. The run history itself is in
-PostgreSQL, written by the worker as the job starts and finishes, with a
-heartbeat so a crashed worker's jobs are marked interrupted.
+**Jobs: Redis.** The backend does not run dbt jobs itself. It pushes a job request onto a
+Redis list and waits (up to 20 s) for a worker's reply, which is the job's
+first status, or why it could not start. The worker builds the plan (reading
+the dbt project), runs it, and appends every log line and the final status to
+a Redis stream for that job. The backend serves the job's live log over the
+WebSocket from that stream, and *Cancel* is a message on a Redis channel that
+the worker running the job acts on. The run history itself is in PostgreSQL,
+written by the worker as the job starts and finishes, with a heartbeat so a
+crashed worker's jobs are marked interrupted.
 
 Redis also carries cache invalidation (a worker that finishes a SQLFluff or
-profiler run tells insights to drop its cache) and email sign-in codes (any
-identity replica can redeem a code another issued). Nothing in Redis has to
-survive a restart.
+profiler run tells the backend to drop its cache) and email sign-in codes.
+Nothing in Redis has to survive a restart.
 
-**Cube: HTTP, no shared disk.** The semantic service keeps Cube's warehouse
-login and generated data model on its own volume. Cube's `cube.js` polls
+**Cube: HTTP, no shared disk.** The backend keeps Cube's warehouse login and
+generated data model on its `/data` volume. Cube's `cube.js` polls
 `/internal/cube/state` every few seconds; when the model or login version
 changes it fetches the new one, and Cube recompiles. Both directions use
-`CUBE_API_SECRET`: semantic signs its queries to Cube with it, Cube signs its
-configuration requests with it. The format of that API is versioned
+`CUBE_API_SECRET`: the backend signs its queries to Cube with it, Cube signs
+its configuration requests with it. The format of that API is versioned
 (`cube_contract`): the cube image says which version it speaks, and logs an
-error at start when the semantic service speaks another.
+error at start when the backend speaks another.
 
 ## Data
 
-- **PostgreSQL, one database per service that owns tables**: `portal_identity`
-  and `portal_execution`. A service never reads another's tables; it asks the
-  service. Each service applies its own schema migrations (Alembic, its own
-  version table) on start, serialized across replicas by an advisory lock.
-- **SQLite** remains for the single-node portal only.
-- **The dbt project** is a shared folder (volume): the execution API clones
-  or edits it, workers run dbt in it, insights and semantic read it. On
-  Kubernetes that is a ReadWriteMany volume when pods span nodes.
+- **PostgreSQL, one database** (`portal`). The schema is migrated on start
+  (Alembic, one migration line per area: `alembic_version_identity`,
+  `alembic_version_execution`), serialized across replicas by an advisory lock.
+- **SQLite** for the single-node portal only.
+- **`/data`** (volume `portal_data`): the dbt editor's trash, the key stored
+  credentials are encrypted with (`secret.key`, unless `PORTAL_SECRET_KEY`
+  is set), Cube's state.
+- **The dbt project** is a shared folder (volume): the backend clones or
+  edits it and reads what runs produce, workers run dbt in it. On Kubernetes
+  that is a ReadWriteMany volume when pods span nodes.
+
+**Upgrading from 2026.10 or earlier** (separate identity/execution databases
+and service volumes): compose's one-off `upgrade` service
+([postgres/upgrade.sh](../postgres/upgrade.sh)) moves the data into the one
+database and volume before the backend first starts, and leaves the old ones
+as a backup. On Kubernetes, see [ONBOARDING.md](ONBOARDING.md).
 
 ## Versions and compatibility
 
@@ -121,7 +102,7 @@ Two contracts keep independently released pieces honest:
   error in the frontend's build. At runtime the backend reports its API
   version on `GET /api/version`; the frontend shows a warning banner when the
   major differs from the one it was built for.
-- **Semantic ↔ cube: `/internal/cube`.** Versioned as `cube_contract` (backend
+- **Backend ↔ cube: `/internal/cube`.** Versioned as `cube_contract` (backend
   `cube_manager.CONTRACT_VERSION`, cube image `CUBE_CONTRACT`).
 
 Changing either contract incompatibly means bumping its major and releasing
@@ -132,7 +113,5 @@ the two sides together (one new `releases.yml` entry).
 | Change | Where | Notes |
 |---|---|---|
 | A page's API | backend repo, then `python -m app.openapi > openapi.json`; frontend repo, `npm run gen:api` | two PRs, released as one `releases.yml` entry |
-| A table | backend repo: edit `app/db/tables.py`, then `python -m app.db.migrate revision <service> "<what>"` | the owning service's migration line only |
-| Which service serves a route | `app/core/services.py` and the gateway's `nginx/default.conf.template` | keep them in step |
-| A new cross-service call | add an `/internal` route and a function in `app/clients/` | never import another service's tables |
+| A table | backend repo: edit `app/db/tables.py`, then `python -m app.db.migrate revision <identity\|execution> "<what>"` | the owning area's migration line |
 | Cube's configuration API | backend `cube_manager.py` + cube repo `cube.js` | bump `CONTRACT_VERSION` / `CUBE_CONTRACT` together |

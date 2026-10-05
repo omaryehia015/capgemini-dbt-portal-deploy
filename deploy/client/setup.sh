@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the dbt Portal (microservices stack) for one dbt project, from the
+# Runs the dbt Portal (backend, workers, PostgreSQL, Redis) for one dbt project, from the
 # pre-built images. Needs Docker or Podman with compose; no build, no
 # Python/Node/dbt on this machine. macOS, Linux, WSL and Linux VMs.
 #
@@ -177,10 +177,10 @@ if [[ -n "$profiles_mount$engine_mount" ]]; then
     {
         echo "# Written by setup.sh for this machine."
         echo "services:"
-        for svc in execution worker insights semantic; do
+        for svc in backend worker; do
             mounts=()
             [[ -n "$profiles_mount" ]] && mounts+=("\"$profiles_mount\"")
-            [[ "$svc" == execution && -n "$engine_mount" ]] && mounts+=("\"$engine_mount\"")
+            [[ "$svc" == backend && -n "$engine_mount" ]] && mounts+=("\"$engine_mount\"")
             [[ ${#mounts[@]} -gt 0 ]] || continue
             echo "  $svc:"
             echo "    volumes: [$(IFS=,; echo "${mounts[*]}")]"
@@ -252,11 +252,11 @@ if [[ -z "$SKIP_PULL" ]]; then
 fi
 say "Starting (this takes a minute on first start: databases, migrations)"
 "${C[@]}" up -d --remove-orphans --scale worker="$WORKERS"
-wait_healthy "$PORT" || fail "Not up after 5 minutes. See: ./manage.sh status; ./manage.sh logs identity"
+wait_healthy "$PORT" || fail "Not up after 5 minutes. See: ./manage.sh status; ./manage.sh logs backend"
 
 # -- 5. First sign-in ----------------------------------------------------------
 say "Portal is up: http://localhost:$PORT"
-"${C[@]}" logs identity 2>&1 | grep -A5 "GENERATED INITIAL CREDENTIALS" \
+"${C[@]}" logs backend 2>&1 | grep -A5 "GENERATED INITIAL CREDENTIALS" \
     || echo "No new passwords printed: the accounts already exist from an earlier run."
 url="http://localhost:$PORT/setup"
 if [[ -n "$PROJECTS_ROOT" ]]; then next="Step 2 of the Setup Assistant: pick your project from the folder you shared (or use Git)."
@@ -270,7 +270,7 @@ cat <<EOF
 
 Day to day (from $ROOT):
   ./manage.sh status            # what is running, and whether it is healthy
-  ./manage.sh logs execution    # follow a service's log
+  ./manage.sh logs backend      # follow a service's log
   ./manage.sh doctor            # check this machine and the stack
   ./manage.sh help              # everything else
 EOF

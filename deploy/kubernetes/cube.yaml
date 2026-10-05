@@ -1,5 +1,5 @@
 # Cube, the semantic engine. Stateless: it reads its warehouse login and data
-# model from the semantic service, so it can be scaled and restarted freely.
+# model from the backend, so it can be scaled and restarted freely.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,7 +20,7 @@ spec:
           env:
             - name: CUBEJS_API_SECRET
               valueFrom: { secretKeyRef: { name: dbt-portal-secrets, key: CUBE_API_SECRET } }
-            - { name: PORTAL_SEMANTIC_URL, value: "http://dbt-portal-semantic:8000" }
+            - { name: PORTAL_SEMANTIC_URL, value: "http://dbt-portal-backend:8000" }
           readinessProbe:
             httpGet: { path: /readyz, port: 4000 }
             periodSeconds: 15

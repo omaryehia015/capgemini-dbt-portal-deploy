@@ -6,17 +6,17 @@ repos, each released on its own:
 
 | Repo | What | Images |
 |---|---|---|
-| [capgemini-dbt-portal-backend](https://github.com/omaryehia015/capgemini-dbt-portal-backend) | FastAPI services: identity, execution (+ workers), insights, semantic | `-backend`, `-identity`, `-insights`, `-semantic` |
+| [capgemini-dbt-portal-backend](https://github.com/omaryehia015/capgemini-dbt-portal-backend) | FastAPI: the portal API and its dbt workers | `-backend` |
 | [capgemini-dbt-portal-frontend](https://github.com/omaryehia015/capgemini-dbt-portal-frontend) | React app + the gateway (nginx) | `-frontend` |
 | [capgemini-dbt-portal-cube](https://github.com/omaryehia015/capgemini-dbt-portal-cube) | Cube, the semantic engine | `-cube` |
 | this repo | how they run together, and which versions go together | none |
 
 Images are published to `ghcr.io/omaryehia015/capgemini-dbt-portal-<name>`.
-How the services fit together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+How the containers fit together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Run it
 
-**For a client or a shared server** (microservices, PostgreSQL, Redis):
+**For a client or a shared server** (the portal API, dbt workers, PostgreSQL, Redis):
 
 ```bash
 ./deploy/client/setup.sh /path/to/dbt-project            # Windows: .\deploy\client\setup.ps1 -Project ...
@@ -27,7 +27,7 @@ from [releases.yml](releases.yml)), starts [compose.yaml](compose.yaml) and
 prints the first-login passwords. Clients get the same thing without this
 repo, as the [client kit](deploy/client/README.md).
 
-**On one laptop** (every backend service in one container, SQLite):
+**On one laptop** (dbt runs inside the API container, SQLite, no Redis):
 [compose.single.yaml](compose.single.yaml), or the dbt package's `portal.py`.
 
 **On Kubernetes**: [deploy/kubernetes/](deploy/kubernetes/).

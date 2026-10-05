@@ -1,7 +1,7 @@
 # Portal releases: which versions of the three repos were tested together.
 #
-#   backend   capgemini-dbt-portal-backend: the images backend (all-in-one,
-#             execution and worker), identity, insights, semantic
+#   backend   capgemini-dbt-portal-backend (one image: the portal API and the
+#             workers; up to 2026.10 also -identity, -insights, -semantic)
 #   frontend  capgemini-dbt-portal-frontend
 #   cube      capgemini-dbt-portal-cube
 #
@@ -15,7 +15,7 @@
 #   - frontend and backend: the frontend checks GET /api/version's api_version
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
-#     semantic service's contract (GET /api/version, cube_contract)
+#     backend's contract (GET /api/version, cube_contract)
 latest: "2026.10.4"
 releases:
   "2026.10.4":

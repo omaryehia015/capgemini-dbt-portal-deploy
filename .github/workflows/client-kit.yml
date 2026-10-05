@@ -4,7 +4,7 @@
 #
 #   dbt-portal-client-kit-<release>.zip
 #     compose.yaml  compose.single.yaml  .env.example  releases.yml
-#     postgres/init-databases.sql
+#     postgres/upgrade.sh
 #     setup.sh  setup.ps1  manage.sh  manage.ps1  lib.sh  lib.ps1
 #     install.sh  install.ps1  portal.answers.example  README.md
 #
@@ -48,7 +48,7 @@ jobs:
           kit="dbt-portal-client-kit-$release"
           mkdir -p "$kit/postgres"
           cp compose.yaml compose.single.yaml .env.example releases.yml "$kit/"
-          cp postgres/init-databases.sql "$kit/postgres/"
+          cp postgres/upgrade.sh "$kit/postgres/"
           for f in setup.sh setup.ps1 manage.sh manage.ps1 lib.sh lib.ps1 install.sh install.ps1                    portal.answers.example README.md; do
             cp "deploy/client/$f" "$kit/"
           done

@@ -1,0 +1,40 @@
+# The workers: run the dbt jobs the backend queues. Scale them for concurrent
+# dbt runs (each runs WORKER_CONCURRENCY jobs at once).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbt-portal-worker
+  labels: { app: dbt-portal, component: worker }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: dbt-portal, component: worker }
+  template:
+    metadata:
+      labels: { app: dbt-portal, component: worker }
+    spec:
+      securityContext: { runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001 }
+      # Lets a running dbt step finish on scale-down or rollout.
+      terminationGracePeriodSeconds: 120
+      containers:
+        - name: worker
+          image: capgemini-dbt-portal-backend
+          args: ["python", "-m", "app.worker"]
+          envFrom:
+            - configMapRef: { name: dbt-portal-config }
+            - secretRef: { name: dbt-portal-secrets }
+          env:
+            # The backend clones the project; workers only mount it.
+            - { name: DBT_PROJECT_GIT_URL, value: "" }
+            - { name: WORKER_CONCURRENCY, value: "4" }
+          volumeMounts:
+            - { name: workspace, mountPath: /workspace }
+          livenessProbe:
+            exec: { command: ["python", "-m", "app.worker", "--check"] }
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { memory: 4Gi }
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: { claimName: dbt-portal-workspace }

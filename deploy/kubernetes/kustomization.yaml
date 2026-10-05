@@ -1,13 +1,13 @@
-# Per-client install of the microservices stack:
+# Per-client install of the portal:
 #   1. cp secrets.env.example secrets.env   (git-ignored) and fill it in
 #   2. edit portal.env (non-secret settings) and the image tags below
 #      (releases.yml lists the versions released together)
 #   3. kubectl apply -k deploy/kubernetes
-#   4. kubectl -n dbt-portal logs deploy/dbt-portal-identity   -> first-login passwords
+#   4. kubectl -n dbt-portal logs deploy/dbt-portal-backend   -> first-login passwords
 #
 # PostgreSQL and Redis are included as single-pod defaults (data-stores.yaml).
 # In production use the platform's managed ones: delete data-stores.yaml from
-# `resources`, then point DATABASE_URL_* and REDIS_URL in secrets.env at them.
+# `resources`, then point DATABASE_URL and REDIS_URL in secrets.env at them.
 #
 # Full walkthrough: docs/ONBOARDING.md
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -19,10 +19,8 @@ resources:
   - namespace.yaml
   - data-stores.yaml
   - workspace.yaml
-  - identity.yaml
-  - execution.yaml
-  - insights.yaml
-  - semantic.yaml
+  - backend.yaml
+  - worker.yaml
   - cube.yaml
   - frontend.yaml
   - ingress.yaml
@@ -41,15 +39,6 @@ secretGenerator:
 images:
   - name: capgemini-dbt-portal-backend
     newName: ghcr.io/omaryehia015/capgemini-dbt-portal-backend
-    newTag: "1.0.0"
-  - name: capgemini-dbt-portal-identity
-    newName: ghcr.io/omaryehia015/capgemini-dbt-portal-identity
-    newTag: "1.0.0"
-  - name: capgemini-dbt-portal-insights
-    newName: ghcr.io/omaryehia015/capgemini-dbt-portal-insights
-    newTag: "1.0.0"
-  - name: capgemini-dbt-portal-semantic
-    newName: ghcr.io/omaryehia015/capgemini-dbt-portal-semantic
     newTag: "1.0.0"
   - name: capgemini-dbt-portal-cube
     newName: ghcr.io/omaryehia015/capgemini-dbt-portal-cube

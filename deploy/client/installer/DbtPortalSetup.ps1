@@ -87,7 +87,7 @@ if ($env:PORTAL_KIT_DIR) {
     $kit = Join-Path $tmp "assembled"
     New-Item -ItemType Directory (Join-Path $kit "postgres") -Force | Out-Null
     foreach ($f in "compose.yaml", "compose.single.yaml", ".env.example", "releases.yml") { Copy-Item (Join-Path $src.FullName $f) $kit }
-    Copy-Item (Join-Path $src.FullName "postgres\init-databases.sql") (Join-Path $kit "postgres")
+    Copy-Item (Join-Path $src.FullName "postgres\upgrade.sh") (Join-Path $kit "postgres")
     foreach ($f in "setup.sh", "setup.ps1", "manage.sh", "manage.ps1", "lib.sh", "lib.ps1", "install.sh", "install.ps1", "portal.answers.example", "README.md") {
         Copy-Item (Join-Path $src.FullName "deploy\client\$f") $kit
     }

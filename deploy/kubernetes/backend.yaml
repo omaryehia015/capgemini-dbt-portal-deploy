@@ -1,0 +1,75 @@
+# The portal API: every page's API in one process. dbt runs are queued for the
+# workers (worker.yaml) through Redis. One replica: the semantic layer's
+# warehouse login and Cube model are files on its ReadWriteOnce volume (with a
+# ReadWriteMany storage class it can run more).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbt-portal-backend
+  labels: { app: dbt-portal, component: backend }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: dbt-portal, component: backend }
+  template:
+    metadata:
+      labels: { app: dbt-portal, component: backend }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext: { runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001 }
+      containers:
+        - name: backend
+          image: capgemini-dbt-portal-backend
+          ports: [{ containerPort: 8000 }]
+          envFrom:
+            - configMapRef: { name: dbt-portal-config }
+            - secretRef: { name: dbt-portal-secrets }
+          env:
+            - { name: EXECUTION_ROLE, value: api }
+          volumeMounts:
+            - { name: workspace, mountPath: /workspace }
+            - { name: data, mountPath: /data }
+          # Git clone + dbt deps happen before uvicorn listens.
+          startupProbe:
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 15
+          livenessProbe:
+            httpGet: { path: /api/health, port: 8000 }
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 250m, memory: 768Mi }
+            limits: { memory: 2Gi }
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: { claimName: dbt-portal-workspace }
+        # The dbt editor's trash, the stored-credentials key, Cube's state.
+        - name: data
+          persistentVolumeClaim: { claimName: dbt-portal-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dbt-portal-backend
+  labels: { app: dbt-portal, component: backend }
+spec:
+  selector: { app: dbt-portal, component: backend }
+  ports: [{ port: 8000, targetPort: 8000 }]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dbt-portal-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
