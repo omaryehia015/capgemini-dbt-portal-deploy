@@ -16,8 +16,20 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.6"
+latest: "2026.10.7"
 releases:
+  "2026.10.7":
+    backend: "1.3.0"
+    frontend: "1.3.0"
+    cube: "1.0.1"
+    notes: >-
+      Ask AI answers in full (no more "answer truncated" through a GenAI
+      gateway) and shows each lookup live, with a Stop button. Two tabs: Data
+      Governance (lineage, failing tests and their root causes, documentation,
+      test and ownership coverage) and Data Marts & KPIs, which answers from
+      the semantic layer's governed measures first and SQL on the dbt models
+      otherwise, with a chart for each result. Wide chat and follow-up
+      questions.
   "2026.10.6":
     backend: "1.2.1"
     frontend: "1.2.0"
