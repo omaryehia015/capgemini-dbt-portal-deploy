@@ -2,8 +2,8 @@
 # from the pre-built images. Needs Docker Desktop, or Podman Desktop with a
 # compose provider; no build, no Python/Node/dbt on this machine.
 #
-#   .\setup.ps1                                               # connect the dbt project (Git) in the portal
-#   .\setup.ps1 -ProjectsRoot C:\work                         # share a folder; pick the project in the portal
+#   .\setup.ps1                                               # pick the dbt project in the portal (folder, image or Git)
+#   .\setup.ps1 -ProjectsRoot D:\work                         # share another folder than the system drive
 #   .\setup.ps1 -Project C:\work\my-dbt-project
 #   .\setup.ps1 -Project C:\work\my-dbt-project -Port 8081 -Release 2026.10.0
 #   .\setup.ps1 -Project C:\work\my-dbt-project -SkipPull     # images already here (docker load)
@@ -73,22 +73,19 @@ if ($Answers) {
 # in its Setup Assistant (the portal keeps its own copy). A folder is mounted live.
 # An existing install keeps the folder it shares unless another one is given.
 $sharedBefore = Get-Env DBT_PROJECTS_ROOT
-if (-not $Project -and -not $ProjectsRoot -and -not $NonInteractive -and -not $sharedBefore -and -not (Test-Path .env)) {
-    Say "Your dbt project"
-    Write-Host "  1) A Git repository (you connect it in the portal; recommended)"
-    Write-Host "  2) A folder on this machine (you pick the project in the portal)"
-    if ((Read-Host "Choose 1 or 2 [1]") -eq "2") {
-        $ProjectsRoot = Read-Host "Folder that holds your dbt project (or several; a parent folder is fine)"
-    }
-}
+# Nothing to ask: the project is chosen in the portal, by pasting a folder's path,
+# naming an image or a Git repository. Sharing the system drive (as the Windows
+# installer does) lets any folder on it be pasted there.
+$defaultShare = $false
+if (-not $ProjectsRoot -and -not $sharedBefore) { $ProjectsRoot = $env:SystemDrive + "\"; $defaultShare = $true }
 # The portal keeps its own workspace volume unless one fixed project folder is mounted.
 $GitMode = -not $Project
 if ($ProjectsRoot) {
     $ProjectsRoot = $ProjectsRoot.Trim('"')
     if (-not (Test-Path $ProjectsRoot -PathType Container)) { Fail "The folder '$ProjectsRoot' does not exist." }
     $ProjectsRoot = (Resolve-Path $ProjectsRoot).Path
-    Ok "Sharing $ProjectsRoot with the portal: you pick the project in the Setup Assistant"
-    if ($Project) { Warn "-Project is used as a fixed project; -ProjectsRoot only adds the shared folder." }
+    Ok "Sharing $ProjectsRoot with the portal: paste the project folder in the Setup Assistant"
+    if ($Project -and -not $defaultShare) { Warn "-Project is used as a fixed project; -ProjectsRoot only adds the shared folder." }
 }
 if ($GitMode) {
     if (-not $ProjectsRoot) { Ok "The project is connected in the portal (Setup Assistant)" }

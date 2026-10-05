@@ -3,8 +3,8 @@
 # pre-built images. Needs Docker or Podman with compose; no build, no
 # Python/Node/dbt on this machine. macOS, Linux, WSL and Linux VMs.
 #
-#   ./setup.sh                                         # connect the dbt project (Git) in the portal
-#   ./setup.sh --projects-root ~/work                  # share a folder; pick the project in the portal
+#   ./setup.sh                                         # pick the dbt project in the portal (folder, image or Git)
+#   ./setup.sh --projects-root ~/work                  # share another folder than your home folder
 #   ./setup.sh /path/to/my-dbt-project
 #   ./setup.sh /path/to/my-dbt-project --port 8081 --release 2026.10.0
 #   ./setup.sh /path/to/my-dbt-project --skip-pull     # images already here (docker load)
@@ -83,25 +83,20 @@ if [[ -n "$ANSWERS" ]]; then
 fi
 
 # -- 2. The dbt project --------------------------------------------------------
-# No folder given: the portal gets the project from a Git repository you connect
-# in its Setup Assistant (the portal keeps its own copy). A folder is mounted live.
+# Nothing to ask: the project is chosen in the portal's Setup Assistant, by
+# pasting a folder's path, naming an image or a Git repository. Your home
+# folder is shared with the portal so any project in it can be pasted there.
+# A project folder given here is mounted as a fixed project instead.
 # An existing install keeps the folder it shares unless another one is given.
 SHARED_BEFORE="$(get_env DBT_PROJECTS_ROOT)"
-if [[ -z "$PROJECT" && -z "$PROJECTS_ROOT" && -z "$NON_INTERACTIVE" && -z "$SHARED_BEFORE" && ! -f .env ]]; then
-    say "Your dbt project"
-    echo "  1) A Git repository (you connect it in the portal; recommended)"
-    echo "  2) A folder on this machine (you pick the project in the portal)"
-    read -rp "Choose 1 or 2 [1]: " choice
-    if [[ "$choice" == 2 ]]; then
-        read -rp "Folder that holds your dbt project (or several; a parent folder is fine): " PROJECTS_ROOT
-    fi
-fi
+DEFAULT_SHARE=""
+if [[ -z "$PROJECTS_ROOT" && -z "$SHARED_BEFORE" && -d "$HOME" ]]; then PROJECTS_ROOT="$HOME"; DEFAULT_SHARE=1; fi
 if [[ -n "$PROJECTS_ROOT" ]]; then
     PROJECTS_ROOT="${PROJECTS_ROOT/#\~/$HOME}"
     [[ -d "$PROJECTS_ROOT" ]] || fail "The folder '$PROJECTS_ROOT' does not exist."
     PROJECTS_ROOT="$(cd "$PROJECTS_ROOT" && pwd)"
-    ok "Sharing $PROJECTS_ROOT with the portal: you pick the project in the Setup Assistant"
-    [[ -z "$PROJECT" ]] || warn "A project folder is used as a fixed project; --projects-root only adds the shared folder."
+    ok "Sharing $PROJECTS_ROOT with the portal: paste the project folder in the Setup Assistant"
+    [[ -z "$PROJECT" || -n "$DEFAULT_SHARE" ]] || warn "A project folder is used as a fixed project; --projects-root only adds the shared folder."
 fi
 GIT_MODE=""
 if [[ -z "$PROJECT" ]]; then
