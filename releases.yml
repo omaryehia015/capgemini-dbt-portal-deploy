@@ -16,8 +16,21 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.9"
+latest: "2026.10.10"
 releases:
+  "2026.10.10":
+    backend: "1.4.2"
+    frontend: "1.4.1"
+    cube: "1.0.1"
+    notes: >-
+      Every install can switch its dbt project in the Setup Assistant by
+      pasting a folder's path (the dbt_project.yml path, a quoted Explorer
+      path or a parent folder with one project), and the card shows the
+      project's name, version and profile. A fixed install records the choice
+      in the portal's data folder, never in the client's folder. The
+      installers no longer ask about the project: they share the system drive
+      (Windows) or home folder. dbt retry works after a run that generated
+      docs.
   "2026.10.9":
     backend: "1.4.1"
     frontend: "1.4.0"
