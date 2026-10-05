@@ -16,8 +16,17 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.8"
+latest: "2026.10.9"
 releases:
+  "2026.10.9":
+    backend: "1.4.1"
+    frontend: "1.4.0"
+    cube: "1.0.1"
+    notes: >-
+      Fixes found by a smoke test of every page: the Home page's warehouse
+      tuning panel failed ("invalid identifier BYTES_SPILLED_TO_LOCAL_STORAGE"),
+      FinOps query patterns came back empty (a reserved word in the query), and
+      FinOps model costs showed "0 runs".
   "2026.10.8":
     backend: "1.4.0"
     frontend: "1.4.0"
