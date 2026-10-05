@@ -16,8 +16,19 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.10"
+latest: "2026.10.11"
 releases:
+  "2026.10.11":
+    backend: "1.4.2"
+    frontend: "1.4.2"
+    cube: "1.0.1"
+    notes: >-
+      AI assist on dbt Development is easy to find: a branded AI button in
+      the activity bar and the page header, an AI card on the empty editor,
+      and Document / Tests buttons on every model (and its right-click menu)
+      that open the panel and start right away. The panel says what each
+      tool gives, keeps drafts when switching tools and opens wide enough to
+      read them.
   "2026.10.10":
     backend: "1.4.2"
     frontend: "1.4.1"
