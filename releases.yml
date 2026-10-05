@@ -16,8 +16,16 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.5"
+latest: "2026.10.6"
 releases:
+  "2026.10.6":
+    backend: "1.2.1"
+    frontend: "1.2.0"
+    cube: "1.0.1"
+    notes: >-
+      Fixes dbt runs of a project chosen in the Setup Assistant (a folder on
+      this computer or an image): they failed with "No dbt_project.yml found
+      at /workspace".
   "2026.10.5":
     backend: "1.2.0"
     frontend: "1.2.0"
