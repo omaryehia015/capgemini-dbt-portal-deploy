@@ -16,8 +16,17 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.4"
+latest: "2026.10.5"
 releases:
+  "2026.10.5":
+    backend: "1.2.0"
+    frontend: "1.2.0"
+    cube: "1.0.1"
+    notes: >-
+      An optional AI provider is connected in the Setup Assistant (a company
+      GenAI gateway, Anthropic, OpenAI or Gemini) instead of the .env file.
+      Admins manage every account, the built-in admin and their own
+      included. Users & Access has two sections; the sidebar sections fold.
   "2026.10.4":
     backend: "1.1.2"
     frontend: "1.1.1"
