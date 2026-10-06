@@ -16,8 +16,17 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.12"
+latest: "2026.10.13"
 releases:
+  "2026.10.13":
+    backend: "1.5.0"
+    frontend: "1.6.0"
+    cube: "1.0.1"
+    notes: >-
+      Copilot changes are reviewed change by change: an inline diff with
+      Keep / Discard on each change and "Apply N of M", Accept all / Reject
+      all across files, and checkpoints: revert one file, an answer, or
+      everything applied since a question, from the chat or its history.
   "2026.10.12":
     backend: "1.5.0"
     frontend: "1.5.0"
