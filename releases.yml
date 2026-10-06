@@ -16,8 +16,20 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.13"
+latest: "2026.10.14"
 releases:
+  "2026.10.14":
+    backend: "1.5.1"
+    frontend: "1.7.0"
+    cube: "1.0.1"
+    notes: >-
+      Ask AI is redesigned as a colorful chat: a greeting with colored
+      starter cards, the Governance / Data & KPIs switch in the composer,
+      a single "what it is doing" line instead of the list of lookups,
+      answers written out progressively with Copy, Regenerate and follow-up
+      chips, and an opt-in side panel. The assistant answers
+      conversationally: it follows the thread, leads with the answer, states
+      its assumption on an ambiguous question and never narrates its lookups.
   "2026.10.13":
     backend: "1.5.0"
     frontend: "1.6.0"
