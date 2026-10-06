@@ -357,15 +357,35 @@ Cube reads its configuration from the backend's `/internal/cube` API
 
 ## 4. Warehouse credentials and the dbt profile
 
-The portal never talks to the warehouse directly except through dbt and a
-thin Snowflake metadata browser ([app/services/snowflake.py](https://github.com/omaryehia015/capgemini-dbt-portal-backend/blob/main/app/services/snowflake.py)).
-Both read the **same** environment variables, so one set of credentials
-covers dbt runs and the in-portal warehouse pages:
+The portal never talks to the warehouse directly except through dbt and thin
+metadata clients for the pages that read warehouse tables (Elementary, FinOps,
+SQL Linter, Profiler, Ask AI): [app/services/warehouse/](https://github.com/omaryehia015/capgemini-dbt-portal-backend/blob/main/app/services/warehouse/).
+Those pages work on **Snowflake and Databricks** today; on any other adapter dbt
+runs and the reports work, and the warehouse pages say they are not available.
 
+**The simplest way is the Setup Assistant's Warehouse step**: pick the platform,
+sign in (Databricks: server hostname, HTTP path of a SQL warehouse, and a personal
+access token or a service principal's OAuth secret), and the portal keeps the login
+encrypted, writes a `portal` target into `profiles.yml` that holds only
+`env_var()` references, and passes the values to dbt and the metadata pages
+(`DBT_WH_*`, plus `DBT_WH_TYPE`, which tells the pages the platform).
+
+Without the Setup Assistant, the pages read the same environment variables as
+the profile. Snowflake:
 `DBT_PKG_ACCOUNT`, `DBT_PKG_USER`, `DBT_PKG_PASSWORD`, `DBT_PKG_ROLE`,
 `DBT_PKG_WAREHOUSE`, `DBT_PKG_DATABASE` (legacy `DBT_SNOWFLAKE_*` /
 `SNOWFLAKE_*` names are also read, in that order, for clients whose existing
-`profiles.yml` already used them).
+`profiles.yml` already used them). Databricks: `DBT_WH_TYPE=databricks`,
+`DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH`, `DATABRICKS_TOKEN` (or
+`DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`), with `DBT_PKG_DATABASE`
+naming the metadata catalog.
+
+**FinOps on Databricks** reads the Unity Catalog system tables through
+capgemini_dbt_core's FinOps models (`dbt run --select capgemini_dbt_core.finops`):
+the login dbt runs as needs `USE CATALOG` on `system` and `USE SCHEMA` + `SELECT`
+on `system.billing`, `system.query` and `system.compute` (granted by a metastore
+admin; the system schemas must be enabled). On Snowflake FinOps still comes from
+`dbt_snowflake_monitoring`.
 
 **You almost never set these yourself.** The backend images' [docker-entrypoint.sh](https://github.com/omaryehia015/capgemini-dbt-portal-backend/blob/main/docker-entrypoint.sh)
 loads the mounted/cloned project's own `.env` (whatever sits next to its
@@ -420,12 +440,13 @@ Where `profiles.yml` lives:
    above makes this safe — no secret is in the file).
 3. `~/.dbt/profiles.yml` inside the container.
 
-**A different warehouse** (BigQuery, Redshift, Postgres, Databricks, ...):
-add that adapter to the backend image (backend, workers, single node) with the `EXTRA_PIP_PACKAGES` build arg
+**Adapters in the image**: dbt-snowflake, dbt-databricks, dbt-redshift and
+dbt-postgres are in the backend image. Another one (BigQuery, DuckDB, Spark,
+ClickHouse, ...): add it with the `EXTRA_PIP_PACKAGES` build arg
 — `podman build --build-arg EXTRA_PIP_PACKAGES="dbt-bigquery~=1.8.0" .` in the backend repo
-(compose.build.yaml: set `EXTRA_PIP_PACKAGES` in `.env`) — and write `profiles.yml`
-accordingly. `snowflake.py`'s pages will no-op for non-Snowflake clients
-(`is_configured()` returns false); nothing else assumes Snowflake.
+(compose.build.yaml: set `EXTRA_PIP_PACKAGES` in `.env`). The managed semantic
+layer (Cube) supports Snowflake, PostgreSQL, Redshift and BigQuery; Databricks
+needs Cube's JDBC driver and comes later.
 
 **Multiple targets** (dev/staging/prod): set `DBT_TARGET` per deployment. It
 overrides the profile's own `target:` key without touching the file.
