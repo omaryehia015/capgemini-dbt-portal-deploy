@@ -16,8 +16,19 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.11"
+latest: "2026.10.12"
 releases:
+  "2026.10.12":
+    backend: "1.5.0"
+    frontend: "1.5.0"
+    cube: "1.0.1"
+    notes: >-
+      Copilot on dbt Development: the AI panel becomes a chat agent that
+      reads the open file and selection, looks up files, models, lineage
+      and test results, and proposes changes as diffs to accept into the
+      editor. / commands (explain, fix, optimize, refactor, doc, tests,
+      model), @ mentions, Ctrl+I and right-click actions on the selection,
+      and opt-in ghost-text completions (Tab to accept).
   "2026.10.11":
     backend: "1.4.2"
     frontend: "1.4.2"
