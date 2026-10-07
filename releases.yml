@@ -16,8 +16,33 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.14"
+latest: "2026.10.16"
 releases:
+  "2026.10.16":
+    backend: "1.7.0"
+    frontend: "1.9.0"
+    cube: "1.0.1"
+    notes: >-
+      BigQuery next to Snowflake and Databricks: the Setup Assistant connects
+      a GCP project with a service account key, and every page that reads the
+      warehouse (Elementary, test failures, SQL Linter history, FinOps, Ask
+      AI, onboarding provisioning) works on BigQuery. FinOps prices each job
+      from INFORMATION_SCHEMA.JOBS at list price (bytes billed on demand,
+      slot-hours on a reservation). dbt-bigquery is in the backend image.
+      The Setup Assistant offers only the supported warehouses; the others
+      are shown as coming soon.
+  "2026.10.15":
+    backend: "1.6.0"
+    frontend: "1.8.0"
+    cube: "1.0.1"
+    notes: >-
+      Databricks next to Snowflake: the Setup Assistant connects a Databricks
+      SQL warehouse (access token or OAuth service principal, Unity Catalog),
+      and every page that reads the warehouse (Elementary, test failures,
+      profiler, SQL Linter history, FinOps, Ask AI, onboarding) works on
+      either platform, worded after the connected one. FinOps views say
+      plainly which ones are empty and why. Switching the warehouse no
+      longer asks for the old platform's settings as project variables.
   "2026.10.14":
     backend: "1.5.1"
     frontend: "1.7.0"
