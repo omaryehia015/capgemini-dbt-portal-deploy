@@ -16,8 +16,20 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.16"
+latest: "2026.10.17"
 releases:
+  "2026.10.17":
+    backend: "1.7.1"
+    frontend: "1.9.1"
+    cube: "1.0.1"
+    notes: >-
+      Each warehouse offers its own monitoring package: the Setup Assistant
+      lists dbt_bigquery_monitoring on BigQuery and dbt_snowflake_monitoring
+      on Snowflake, and drops one made for another warehouse. On BigQuery the
+      FinOps page reads dbt_bigquery_monitoring's job costs when the client
+      chooses it (and its storage cost with the Cloud Billing export), else
+      the region's job history; onboarding and the dbt Runner build it with
+      the FinOps models.
   "2026.10.16":
     backend: "1.7.0"
     frontend: "1.9.0"
