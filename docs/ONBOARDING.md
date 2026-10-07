@@ -394,12 +394,21 @@ admin; the system schemas must be enabled). On Snowflake FinOps still comes from
 `dbt_snowflake_monitoring`.
 
 **BigQuery** needs a service account with BigQuery Data Editor and BigQuery Job
-User; **FinOps on BigQuery** reads the region's `INFORMATION_SCHEMA.JOBS` through
-the same core models and also needs BigQuery Resource Viewer (`bigquery.jobs.listAll`)
-to see every job, not only its own. Each job is priced at list price: bytes
-billed on demand (`finops_bigquery_price_per_tib`, 6.25 USD) or slot-hours on a
-reservation (`finops_bigquery_slot_hour_price`, 0.06 USD); storage is not
-included. Onboarding's provisioning step creates the metadata datasets in the
+User; **FinOps on BigQuery** comes from the same core models, over
+[dbt_bigquery_monitoring](https://hub.getdbt.com/bqbooster/dbt_bigquery_monitoring/latest/)
+when the client ticks it in the Setup Assistant's packages (offered only on
+BigQuery, the way dbt_snowflake_monitoring is offered only on Snowflake), else
+over the region's `INFORMATION_SCHEMA.JOBS`. Either way the login also needs
+BigQuery Resource Viewer (`bigquery.jobs.listAll`) to see every job, not only its
+own, and each job is priced by bytes billed on demand or by slot-hours on a
+reservation. With the package its prices apply (`per_billed_tb_price`,
+`hourly_slot_price`), the portal passes it the region (`DBT_BQ_MONITORING_REGION`
+from the connection's location), and storage cost is added when it reads the
+Cloud Billing export (`enable_gcp_billing_export`). Without it:
+`finops_bigquery_price_per_tib` (6.25 USD) and `finops_bigquery_slot_hour_price`
+(0.06 USD), and no storage. Some of the package's storage models need
+project-wide metadata access (`INFORMATION_SCHEMA.TABLE_STORAGE`); without it
+they fail on their own and FinOps compute cost is not affected. Onboarding's provisioning step creates the metadata datasets in the
 location and grants the service account BigQuery Data Editor on them; the
 metadata project itself must exist. A project in the BigQuery sandbox (no
 billing account) refuses INSERT and MERGE, so Elementary, incremental models and
