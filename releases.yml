@@ -10,14 +10,31 @@
 # capgemini_dbt_core's scripts/portal.py --release does the same.
 #
 # Each repo releases on its own (vX.Y.Z tag -> images X.Y.Z, X.Y, latest).
+# Since 2026.10.18 the repos' publish-prod pipeline builds images from main
+# as prod-<commit sha> instead; a release pins those tags (the vX.Y.Z git tag
+# still marks the commit).
 # A new entry here is added once the e2e smoke test passes on that
 # combination (.github/workflows/e2e-smoke.yml). Compatibility rules:
 #   - frontend and backend: the frontend checks GET /api/version's api_version
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.17"
+latest: "2026.10.18"
 releases:
+  "2026.10.18":
+    # backend v1.8.0, frontend v1.10.0
+    backend: "prod-a1a3db3ba04c92d8571c837e0bbb4b1223b1dcce"
+    frontend: "prod-c013175a3d065a446ac7df999801d71bdba4de33"
+    cube: "1.0.1"
+    notes: >-
+      Ingestion Hub: one page for every way a client brings data in. Airflow
+      teams connect their Airflow or host one with the portal, Airbyte teams
+      connect or install it, and any other ETL tool (Fivetran, ADF, NiFi...)
+      is added by name and URL and gets its own menu entry. Setup guides
+      list docs and videos per path, and admins add their own recordings.
+      The DAG Studio writes Airflow DAGs in the browser, with templates,
+      checks as you type, an AI assistant and Airflow's import errors; its
+      folder (AIRFLOW_DAGS_DIR) is shared with Airflow so saved DAGs go live.
   "2026.10.17":
     backend: "1.7.1"
     frontend: "1.9.1"
