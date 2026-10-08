@@ -550,6 +550,47 @@ different command.
 portal or Airflow will trigger it, so it never runs twice. Access follows the
 `airflow.manage` permission ("Orchestration & Ingestion": Admin and Data
 Engineer by default), and every sync and cancel lands in the audit trail.
+## 5b. Ingestion Hub, DAG Studio and other ETL tools
+
+**Ingestion Hub** (sidebar → Ingestion & Orchestration) is where a client
+chooses how data reaches the warehouse. It has one card per kind of client:
+
+| The client… | What the portal gives them |
+|---|---|
+| orchestrates in code with **Airflow** | Connect an existing Airflow (Modules page), or install one next to the portal (Modules → *Install on this host*). Developers write DAGs in the **DAG Studio** either way. |
+| wants **low-code connectors** | Airbyte, connected or installed as in section 5a. |
+| already runs **another ETL tool** (Fivetran, ADF, Informatica, Talend, NiFi, Glue…) | An admin adds its name and URL; it gets its own entry under *Ingestion Hub* in the menu, opened in a new tab or inside the portal. |
+
+Each card links to setup guides: the official documentation and video
+walkthroughs, plus any recordings or runbooks an admin adds (a single
+YouTube video plays in place). Tools and links are stored in the portal
+database and every change is in the audit trail.
+
+**DAG Studio** writes Airflow DAGs in the browser: templates (TaskFlow, REST
+API to warehouse, file drop, Airbyte sync then dbt, dbt with Cosmos), checks
+as you type (syntax, missing DAG, dag_id used twice, dynamic `start_date`,
+`schedule_interval`, work at import time, hard-coded credentials, deprecated
+imports) and an AI assistant that sees the open file (it uses the AI provider
+from the Setup Assistant; without one it answers from the checks). It needs
+`dbt.develop` or `airflow.manage`.
+
+The files live in one folder, `AIRFLOW_DAGS_DIR` (default
+`/data/airflow/dags` in the portal's data volume). To make saved DAGs go
+live, give Airflow the same folder:
+
+```yaml
+# compose.yaml, backend service (and the worker on the full stack)
+    environment:
+      AIRFLOW_DAGS_DIR: /airflow/dags
+    volumes:
+      - /opt/airflow/dags:/airflow/dags      # the folder Airflow's own compose mounts as dags/
+```
+
+An Airflow elsewhere (MWAA, Composer, Astronomer, another server) takes the
+folder as a zip (*Download* in the studio) or from the client's repository.
+With the Airflow module connected and an API user set, the studio also shows
+Airflow's own import errors for the open file.
+
 ## 6. Every environment variable (reference)
 
 Full template with inline comments: [.env.example](../.env.example). Grouped
@@ -614,6 +655,7 @@ here by what they control; the backend's `app/core/config.py`,
 | `PORTAL_BASE_URL` | — | Public URL of the portal, so alerts link straight to the failed run. |
 | `AIRFLOW_URL` / `AIRFLOW_WEBSERVER_URL` | — | Default URL shown on the Airflow page; users can still enter one at runtime. |
 | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | — | Service account for the Airflow REST API (with `AIRFLOW_URL`): DAG list, recent runs, trigger, pause. Without them the Airflow page only probes `/health` and embeds the UI. |
+| `AIRFLOW_DAGS_DIR` | `/data/airflow/dags` | Folder the DAG Studio reads and writes (section 5b). Mount the same folder as Airflow's `dags/` and saved DAGs go live on its next parse. |
 | `AIRFLOW_UPSTREAM` | — | Frontend container: `host:port` of an Airflow webserver to serve under `/airflow-ui/` on the portal's origin, so the Airflow page can embed it (a cross-site iframe loses Airflow's session cookie and its login fails with "CSRF session token is missing"). Airflow must run with `AIRFLOW__WEBSERVER__BASE_URL=http://<portal host>/airflow-ui`. |
 | `AIRBYTE_URL` | — | Airbyte root the backend calls (section 5a): `http://host.docker.internal:8000` for `abctl` on the same host, `https://api.airbyte.com/v1` for Airbyte Cloud. Unset = the Airbyte page shows the install steps. |
 | `AIRBYTE_CLIENT_ID` / `AIRBYTE_CLIENT_SECRET` | — | API application credentials (`abctl local credentials`, or an Airbyte Cloud application). Only omit for an install with auth disabled. |
