@@ -566,17 +566,14 @@ walkthroughs, plus any recordings or runbooks an admin adds (a single
 YouTube video plays in place). Tools and links are stored in the portal
 database and every change is in the audit trail.
 
-**DAG Studio** writes Airflow DAGs in the browser: templates (TaskFlow, REST
-API to warehouse, file drop, Airbyte sync then dbt, dbt with Cosmos), checks
-as you type (syntax, missing DAG, dag_id used twice, dynamic `start_date`,
-`schedule_interval`, work at import time, hard-coded credentials, deprecated
-imports) and an AI assistant that sees the open file (it uses the AI provider
-from the Setup Assistant; without one it answers from the checks). It needs
-`dbt.develop` or `airflow.manage`.
+**DAG Studio** is for developing the team's existing DAGs, so it appears
+only once Airflow is connected (Modules page) and opens on a source:
 
-The files live in one folder, `AIRFLOW_DAGS_DIR` (default
-`/data/airflow/dags` in the portal's data volume). To make saved DAGs go
-live, give Airflow the same folder:
+| Source | How | Saving |
+|---|---|---|
+| **Git repository** (GitHub, GitLab, Azure Repos, Bitbucket) | URL, branch, the DAGs folder in the repository, and a token with read/write access (GitHub: fine-grained, *Contents: read and write*). The portal clones it into its data volume; the token is stored encrypted. | Save, then **Commit & push** from the studio, in the portal user's name. **Pull** brings in others' work. Airflow deploys from the repository as it already does. |
+| **Folder on this computer** | Any folder under the projects folder shared with the portal at install (the one the Setup Assistant picks dbt projects from). | Saved files are live in the folder. |
+| **`AIRFLOW_DAGS_DIR`** | Set at install to Airflow's own `dags/` folder mounted into the backend; it overrides the other two. | Live on Airflow's next parse. |
 
 ```yaml
 # compose.yaml, backend service (and the worker on the full stack)
@@ -586,10 +583,19 @@ live, give Airflow the same folder:
       - /opt/airflow/dags:/airflow/dags      # the folder Airflow's own compose mounts as dags/
 ```
 
-An Airflow elsewhere (MWAA, Composer, Astronomer, another server) takes the
-folder as a zip (*Download* in the studio) or from the client's repository.
-With the Airflow module connected and an API user set, the studio also shows
-Airflow's own import errors for the open file.
+Connecting or changing the source needs `airflow.manage`; editing, pulling
+and pushing need `dbt.develop` or `airflow.manage`. The studio checks files
+as you type (syntax, missing DAG, dag_id used twice, dynamic `start_date`,
+`schedule_interval`, work at import time, hard-coded credentials, deprecated
+imports), has templates, and shows Airflow's own import errors when the
+Airflow module has an API user.
+
+**Copilot** works like the one on dbt Development: it sees the open file and
+the selection, reads, searches and checks the rest of the DAGs folder with
+tools (shown as steps while it works), and proposes changes as diffs to
+review, accept into the editor, or reject. It never saves or pushes. It uses
+the AI provider from the Setup Assistant; without one it answers from the
+studio's checks.
 
 ## 6. Every environment variable (reference)
 
@@ -655,7 +661,7 @@ here by what they control; the backend's `app/core/config.py`,
 | `PORTAL_BASE_URL` | — | Public URL of the portal, so alerts link straight to the failed run. |
 | `AIRFLOW_URL` / `AIRFLOW_WEBSERVER_URL` | — | Default URL shown on the Airflow page; users can still enter one at runtime. |
 | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | — | Service account for the Airflow REST API (with `AIRFLOW_URL`): DAG list, recent runs, trigger, pause. Without them the Airflow page only probes `/health` and embeds the UI. |
-| `AIRFLOW_DAGS_DIR` | `/data/airflow/dags` | Folder the DAG Studio reads and writes (section 5b). Mount the same folder as Airflow's `dags/` and saved DAGs go live on its next parse. |
+| `AIRFLOW_DAGS_DIR` | — | Airflow's `dags/` folder mounted into the backend: the DAG Studio edits it directly, instead of a repository or folder chosen in the studio (section 5b). |
 | `AIRFLOW_UPSTREAM` | — | Frontend container: `host:port` of an Airflow webserver to serve under `/airflow-ui/` on the portal's origin, so the Airflow page can embed it (a cross-site iframe loses Airflow's session cookie and its login fails with "CSRF session token is missing"). Airflow must run with `AIRFLOW__WEBSERVER__BASE_URL=http://<portal host>/airflow-ui`. |
 | `AIRBYTE_URL` | — | Airbyte root the backend calls (section 5a): `http://host.docker.internal:8000` for `abctl` on the same host, `https://api.airbyte.com/v1` for Airbyte Cloud. Unset = the Airbyte page shows the install steps. |
 | `AIRBYTE_CLIENT_ID` / `AIRBYTE_CLIENT_SECRET` | — | API application credentials (`abctl local credentials`, or an Airbyte Cloud application). Only omit for an install with auth disabled. |
