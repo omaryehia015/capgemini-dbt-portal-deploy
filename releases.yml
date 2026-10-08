@@ -19,8 +19,22 @@
 #     major against its own and warns on a mismatch
 #   - backend and cube: the cube image's CUBE_CONTRACT must equal the
 #     backend's contract (GET /api/version, cube_contract)
-latest: "2026.10.18"
+latest: "2026.10.19"
 releases:
+  "2026.10.19":
+    # backend v2.0.0, frontend v2.0.0 (API 2.0: the DAG Studio's API changed)
+    backend: "prod-4c8c4a9eaf6b2afb5b982e3fa8454da7236aed8e"
+    frontend: "prod-476c3a2a6e137c83c6f37bf824c6140841ef25d1"
+    cube: "1.0.1"
+    notes: >-
+      DAG Studio develops the team's own DAGs: it appears once Airflow is
+      connected and opens on a Git repository (clone, pull, commit and push
+      from the page) or a folder shared with the portal, or on AIRFLOW_DAGS_DIR.
+      Copilot, as on dbt Development, reads and checks the DAGs folder and
+      proposes changes as diffs to accept or reject. The old built-in DAGs
+      folder and zip download are gone. Includes the warehouse connection
+      fixes from the 2026.10.17 test. Backend and frontend must be upgraded
+      together (API 2.0).
   "2026.10.18":
     # backend v1.8.0, frontend v1.10.0
     backend: "prod-a1a3db3ba04c92d8571c837e0bbb4b1223b1dcce"
