@@ -161,11 +161,17 @@ services:
       backend: { condition: service_healthy }
     ports:
       - "${PORTAL_PORT:-8080}:8080"
+      # AIRFLOW_UI_PORT publishes the Airflow UI proxy; unset, 8082 gets an
+      # unused random host port (nothing listens on it).
+      - "${AIRFLOW_UI_PORT:+${AIRFLOW_UI_PORT}:}8082"
     environment:
       BACKEND_UPSTREAM: backend:8000
-      # Optional: serve a host:port Airflow webserver under /airflow-ui/ on
-      # the portal's origin (Airflow needs AIRFLOW__WEBSERVER__BASE_URL=http://<portal host>/airflow-ui).
+      # Optional: serve a host:port Airflow webserver so the Airflow page can
+      # embed it: under /airflow-ui/ (Airflow needs AIRFLOW__WEBSERVER__BASE_URL=
+      # http://<portal host>/airflow-ui) and, with AIRFLOW_UI_PORT, at the root
+      # of that port (no Airflow change).
       AIRFLOW_UPSTREAM: ${AIRFLOW_UPSTREAM:-}
+      AIRFLOW_UI_PORT: ${AIRFLOW_UI_PORT:-}
     extra_hosts:
       # Docker on Linux has no host alias by default; Podman/Docker Desktop do.
       - "host.docker.internal:host-gateway"
