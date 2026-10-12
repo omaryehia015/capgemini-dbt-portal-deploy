@@ -557,7 +557,7 @@ chooses how data reaches the warehouse. It has one card per kind of client:
 
 | The client… | What the portal gives them |
 |---|---|
-| orchestrates in code with **Airflow** | Connect an existing Airflow (Modules page), or install one next to the portal (Modules → *Install on this host*). Developers write DAGs in the **DAG Studio** either way. |
+| orchestrates in code with **Airflow** | Connect an existing Airflow (Modules page), or install one next to the portal (Modules → *Install on this host*). Developers write DAGs in the **DAG Studio** (Airflow → *DAG Studio* tab) either way. |
 | wants **low-code connectors** | Airbyte, connected or installed as in section 5a. |
 | already runs **another ETL tool** (Fivetran, ADF, Informatica, Talend, NiFi, Glue…) | An admin adds its name and URL; it gets its own entry under *Ingestion Hub* in the menu, opened in a new tab or inside the portal. |
 
@@ -566,14 +566,25 @@ walkthroughs, plus any recordings or runbooks an admin adds (a single
 YouTube video plays in place). Tools and links are stored in the portal
 database and every change is in the audit trail.
 
-**DAG Studio** is for developing the team's existing DAGs, so it appears
-only once Airflow is connected (Modules page) and opens on a source:
+**Turning tools off and on.** Once Airflow or Airbyte is connected, its card
+has an On/Off switch, and so does every added tool. Admins and anyone with
+`dbt.develop` or `airflow.manage` (developers) can use it: off takes the
+tool's page, menu entry and API away for everyone but keeps its connection
+and settings; on brings it back as it was. Switching never changes settings,
+so connecting a tool or editing it stays with admins.
+
+**DAG Studio** is for developing the team's existing DAGs. It is a tab of
+the Airflow page (sidebar → Airflow → *DAG Studio*; the old `/dag-studio`
+address still leads there), so it appears only once Airflow is connected.
+Developers with `dbt.develop` but not `airflow.manage` see only this tab.
+It opens on a source:
 
 | Source | How | Saving |
 |---|---|---|
-| **Git repository** (GitHub, GitLab, Azure Repos, Bitbucket) | URL, branch, the DAGs folder in the repository, and a token with read/write access (GitHub: fine-grained, *Contents: read and write*). The portal clones it into its data volume; the token is stored encrypted. | Save, then **Commit & push** from the studio, in the portal user's name. **Pull** brings in others' work. Airflow deploys from the repository as it already does. |
-| **Folder on this computer** | Any folder under the projects folder shared with the portal at install (the one the Setup Assistant picks dbt projects from). | Saved files are live in the folder. |
-| **`AIRFLOW_DAGS_DIR`** | Set at install to Airflow's own `dags/` folder mounted into the backend; it overrides the other two. | Live on Airflow's next parse. |
+| **Folder on your computer** | *Choose folder…*: any folder anywhere on the user's machine (a local clone, Airflow's `dags/`, a network drive), nothing shared at install. The browser reads it (Edge or Chrome) and uploads the editable files as the studio's working copy. | Each save goes to the portal's copy and, from the browser that chose the folder, straight into the folder. *Reload from folder* reads it again. Other browsers see the portal's copy and can choose the folder themselves. |
+| **Folder the portal can reach** | A folder under the projects folder shared at install, entered relative to it or by its path on the computer (`C:\Users\me\projects\airflow\dags`), or any absolute path on the portal's own server (an install without containers, a volume mounted by hand). | Saved files are live in the folder. |
+| **Git repository** (GitHub, GitLab, Azure Repos, Bitbucket), when the DAGs are not in a folder | URL, branch, the DAGs folder in the repository, and a token with read/write access (GitHub: fine-grained, *Contents: read and write*). The portal clones it into its data volume; the token is stored encrypted. | Save, then **Commit & push** from the studio, in the portal user's name. **Pull** brings in others' work. Airflow deploys from the repository as it already does. |
+| **`AIRFLOW_DAGS_DIR`** | Set at install to Airflow's own `dags/` folder mounted into the backend; it overrides the others. | Live on Airflow's next parse. |
 
 ```yaml
 # compose.yaml, backend service (and the worker on the full stack)
