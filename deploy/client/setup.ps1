@@ -141,23 +141,40 @@ if ($extraEnv.Count) { Say "Applied $($extraEnv.Count) setting(s) from $Answers"
 if (-not $GitMode -or $ProjectsRoot -or $sharedBefore) { Set-Env PORTAL_USER "0:0" }
 
 if ($Release) {
-    # The kit's releases.yml is only as new as the kit: fetch the current one, so
+    # The kit's files are only as new as the kit: fetch the current ones, so
     # -Release latest and manage.ps1 upgrade reach releases made since it was
-    # downloaded. Only in an unpacked kit (a repo checkout keeps its own file).
+    # downloaded, and run with the compose files those releases expect (new
+    # ports, services, settings). Only in an unpacked kit (a repo checkout keeps
+    # its own files). A replaced compose file is kept as <name>.bak.
     if ($Root -eq $PSScriptRoot) {
-        $url = "https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/releases.yml"
-        $fresh = $null
-        try { $fresh = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 $url).Content } catch {
-            if ($env:PORTAL_TOKEN) {
-                try { $fresh = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 -Headers @{ Authorization = "Bearer $env:PORTAL_TOKEN" } $url).Content } catch { }
+        function Get-KitFile([string]$Name, [string]$Pattern) {
+            $url = "https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/$Name"
+            $fresh = $null
+            try { $fresh = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 $url).Content } catch {
+                if ($env:PORTAL_TOKEN) {
+                    try { $fresh = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 20 -Headers @{ Authorization = "Bearer $env:PORTAL_TOKEN" } $url).Content } catch { }
+                }
             }
+            if ($fresh -is [byte[]]) { $fresh = [Text.Encoding]::UTF8.GetString($fresh) }
+            if (-not ($fresh -and $fresh -match $Pattern)) { return $null }
+            $path = Join-Path $Root $Name
+            $current = if (Test-Path $path) { [IO.File]::ReadAllText($path) } else { $null }
+            if ($current -ne $fresh) {
+                if ($current -and $Name -ne "releases.yml") { Copy-Item $path "$path.bak" -Force }
+                [IO.File]::WriteAllText($path, $fresh)
+            }
+            return $fresh
         }
-        if ($fresh -is [byte[]]) { $fresh = [Text.Encoding]::UTF8.GetString($fresh) }
-        if ($fresh -and $fresh -match '(?m)^latest:') {
-            [IO.File]::WriteAllText((Join-Path $Root "releases.yml"), $fresh)
+        $fresh = Get-KitFile "releases.yml" '(?m)^latest:'
+        if ($fresh) {
             Ok "Release list updated (latest: $(([regex]::Match($fresh, '(?m)^latest:\s*"?([^"\r\n]+)"?')).Groups[1].Value))"
         } else {
             Warn "Could not fetch the current release list: using the one in this kit."
+        }
+        foreach ($file in "compose.yaml", "compose.single.yaml") {
+            if ((Test-Path (Join-Path $Root $file)) -and -not (Get-KitFile $file '(?m)^services:')) {
+                Warn "Could not fetch the current ${file}: using the one in this kit."
+            }
         }
     }
     $text = Get-Content releases.yml -Raw -Encoding UTF8
