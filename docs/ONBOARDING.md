@@ -673,7 +673,7 @@ here by what they control; the backend's `app/core/config.py`,
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | Logging. `json` writes one object per line with a `request_id`; `text` is easier to read on a laptop. |
 | `METRICS_ENABLED` | `true` | Prometheus metrics at `/metrics` on the backend's port (not proxied by the gateway, so internal only). |
 | `SCHEDULER_ENABLED` | `true` | Fire dbt Runner schedules. Runs on the workers (or the single node); safe with several, each slot is claimed once in the database. |
-| `NOTIFY_SLACK_WEBHOOK` / `NOTIFY_TEAMS_WEBHOOK` / `NOTIFY_EMAIL_TO` | — | Default failure-alert channels. Admins can change them at runtime (Governance → Failure alerts); the stored values win. |
+| `NOTIFY_SLACK_WEBHOOK` / `NOTIFY_TEAMS_WEBHOOK` / `NOTIFY_EMAIL_TO` | — | First failure-alert channels. Read once, on the first start: they become default channels named `slack`, `teams` and `email`, managed from then on in Governance → Failure alerts. |
 | `PORTAL_BASE_URL` | — | Public URL of the portal, so alerts link straight to the failed run. |
 | `AIRFLOW_URL` / `AIRFLOW_WEBSERVER_URL` | — | Default URL shown on the Airflow page; users can still enter one at runtime. |
 | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | — | Service account for the Airflow REST API (with `AIRFLOW_URL`): DAG list, recent runs, trigger, pause. Without them the Airflow page only probes `/health` and embeds the UI. |
@@ -781,10 +781,38 @@ who last saved it, and stops firing if that user is disabled or loses
 `dbt.execute`. A slot missed while every worker was down runs late only
 within 5 minutes; older ones are skipped, not replayed.
 
-**Failure alerts.** Governance → Failure alerts (Admin role): Slack and Teams
-webhooks, email recipients, and whether warnings and manual runs alert too.
-*Send test alert* checks each channel. Webhook URLs are never shown again
-after saving; the page displays a masked form.
+**Failure alerts.** Governance → Failure alerts. Admins add *channels*: any
+number of Slack or Teams webhooks and email lists, each under a name such as
+`finance-data`, and mark some as *default*. Webhook URLs are never shown again
+after saving; the page displays a masked form. Admins also decide whether
+warnings and manual runs alert. Anyone with the `alerts.manage` permission
+(Admin and Data Engineer by default; grant it to other roles under Users &
+roles) writes *routing rules* that send failures to channels by dbt tag,
+`meta.owner` or model name/path glob, and can send a test to any channel. A
+rule can also list email addresses directly (a person, a team list), so
+specific people get their failures by email without an admin adding a channel.
+
+**Mail server.** Email channels, the addresses on rules and email sign-in
+codes go through the SMTP server an admin saves on the same page (host, port,
+STARTTLS / SSL / none, login, sender address; *Send test email* checks it).
+The password is stored encrypted and never shown again. A server saved there
+wins over the `SMTP_*` variables; *Remove* falls back to them.
+
+When a run fails, each failing test, model, seed, snapshot or source goes to
+the channel its dbt `meta.channel` (or `meta.alerts_config.channel`, as in
+Elementary) names, plus the channels of every rule it matches; anything
+unrouted goes to the default channels. Each channel gets one message listing
+its failures, with Elementary's description of the result when the project
+uses Elementary. *Check routing* shows where the last run's failures would go.
+
+```yaml
+models:
+  - name: fct_revenue
+    config:
+      meta:
+        owner: "@fin-team"
+        channel: finance-data
+```
 
 **Restarts.** Running jobs are written to the portal database and kept
 alive by the worker's heartbeat. If a worker stops, its jobs are marked failed
