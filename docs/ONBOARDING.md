@@ -627,6 +627,7 @@ here by what they control; the backend's `app/core/config.py`,
 | `JWT_SECRET` | generated (single node only) | Session signing key, the same for every service. Also signs service-to-service calls. |
 | `CUBE_API_SECRET` | generated (single node only) | Shared by the backend and Cube (Cube's `CUBEJS_API_SECRET`). |
 | `CUBE_API_URL` | `http://cube:4000` | Where the backend reaches Cube. |
+| `CUBE_AUTO_REGENERATE` | `true` | After a successful dbt job that changed `manifest.json`, regenerate the semantic model with the dbt folders last picked on the Semantic page. `false`: only the Generate button does. Needs the model generated once. |
 | `PORTAL_SEMANTIC_URL` | `http://semantic:8000` | Cube container: where it reads its configuration (`http://backend:8000` in both compose files). |
 | `BACKEND_UPSTREAM` | `backend:8000` | Frontend container: where the gateway sends `/api` (section 3). |
 | `PORTAL_DATA_DIR` | `/data` in the images | Files the backend keeps outside its database: the semantic layer's state, the dbt editor's trash, the stored-credentials key, a single node's SQLite file. |
