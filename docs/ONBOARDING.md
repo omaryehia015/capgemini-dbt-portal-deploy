@@ -473,7 +473,9 @@ ClickHouse, ...): add it with the `EXTRA_PIP_PACKAGES` build arg
 — `podman build --build-arg EXTRA_PIP_PACKAGES="dbt-duckdb" .` in the backend repo
 (compose.build.yaml: set `EXTRA_PIP_PACKAGES` in `.env`). The managed semantic
 layer (Cube) supports Snowflake, PostgreSQL, Redshift and BigQuery; Databricks
-needs Cube's JDBC driver and comes later.
+needs Cube's JDBC driver and comes later. How dbt and Cube work together, and how
+to open the semantic layer to BI tools and AI agents (SQL API, MCP):
+[SEMANTIC_LAYER.md](SEMANTIC_LAYER.md).
 
 **Multiple targets** (dev/staging/prod): set `DBT_TARGET` per deployment. It
 overrides the profile's own `target:` key without touching the file.
