@@ -16,7 +16,9 @@ spec:
       containers:
         - name: cube
           image: capgemini-dbt-portal-cube
-          ports: [{ containerPort: 4000 }]
+          # 15432: the SQL API for BI tools and agents (per-user logins from the
+          # Semantic Modeling page, checked by the backend).
+          ports: [{ containerPort: 4000 }, { containerPort: 15432, name: sql }]
           env:
             - name: CUBEJS_API_SECRET
               valueFrom: { secretKeyRef: { name: dbt-portal-secrets, key: CUBE_API_SECRET } }
@@ -39,4 +41,9 @@ metadata:
   labels: { app: dbt-portal, component: cube }
 spec:
   selector: { app: dbt-portal, component: cube }
-  ports: [{ port: 4000, targetPort: 4000 }]
+  ports:
+    - { name: api, port: 4000, targetPort: 4000 }
+    # In-cluster only. For BI tools outside the cluster, expose it with an
+    # internal LoadBalancer (or NodePort) and set CUBE_SQL_HOST / CUBE_SQL_PORT
+    # on the backend to the address users connect to.
+    - { name: sql, port: 15432, targetPort: 15432 }

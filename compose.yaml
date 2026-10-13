@@ -147,6 +147,11 @@ services:
       CUBEJS_API_SECRET: ${CUBE_API_SECRET}
       PORTAL_SEMANTIC_URL: http://backend:8000
     expose: ["4000"]
+    # Cube's SQL API (Postgres protocol) for BI tools, notebooks and AI agents.
+    # No shared password: each user makes a login on the Semantic Modeling page,
+    # and Cube asks the backend to check it on every connection.
+    ports:
+      - "${CUBE_SQL_PORT:-15432}:15432"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/livez').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s

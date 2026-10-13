@@ -117,59 +117,76 @@ with the dbt code and survives every regeneration:
 |---|---|---|
 | Business users in the portal | Semantic Modeling page (explore, query, CSV) | Built in |
 | Plain-language questions | Ask AI (Data tab) answers through the semantic layer | Built in |
-| Power BI, Tableau, Excel, Superset, Metabase | Cube **SQL API** (Postgres protocol) | Opt-in, below |
-| Python, notebooks, JDBC/ODBC apps | SQL API with any Postgres driver | Opt-in, below |
-| AI assistants and agents (Claude, Copilot, Cursor, custom) | A Postgres MCP server on the SQL API | Opt-in, below |
+| Power BI, Tableau, Excel, Superset, Metabase | Cube **SQL API** (Postgres protocol) | Built in, below |
+| Python, notebooks, JDBC/ODBC apps | SQL API with any Postgres driver | Built in, below |
+| AI assistants and agents (Claude, Copilot, Cursor, custom) | A Postgres MCP server on the SQL API | Built in, below |
 
 Cube's REST API stays internal: its tokens are signed with `CUBE_API_SECRET`,
 the portal's own key to Cube. Never give that secret to a tool.
 
-### Turn on the SQL API (administrator, once)
+### Getting a login (each user, one click)
 
-Compose, in a `compose.override.yaml` next to `compose.yaml` (compose reads it
-automatically):
+Nobody shares a password and no administrator hands one out. On the Semantic
+Modeling page, **Connect BI & AI → Create my SQL password**:
 
-```yaml
-services:
-  cube:
-    ports:
-      - "15432:15432"            # publish only on a network BI users can reach
-    environment:
-      CUBEJS_PG_SQL_PORT: "15432"
-      CUBEJS_SQL_USER: ${CUBE_SQL_USER:-bi_reader}
-      CUBEJS_SQL_PASSWORD: ${CUBE_SQL_PASSWORD:?set CUBE_SQL_PASSWORD in .env}
+- The login is the user's portal username; the password is a random token shown
+  once, with a ready connection string, Python snippet and MCP config.
+- Only a SHA-256 of it is stored (backend `CUBE_STATE_DIR/sql_logins.json`).
+- Cube's `checkSqlAuth` (cube repo `cube.js`) asks the backend
+  (`POST /internal/cube/sql-auth`) on every new connection, so the login works
+  only while the user is active and has `observability.view`. A new password
+  replaces the old one at once; **Delete** revokes it. Both are in the audit trail.
+
+How the pieces fit:
+
+```mermaid
+sequenceDiagram
+  participant U as User (portal)
+  participant B as Backend (semantic)
+  participant T as BI tool / agent
+  participant C as Cube SQL API :15432
+  U->>B: POST /api/semantic/sql-access
+  B-->>U: login + password (shown once)
+  T->>C: connect user/password (Postgres protocol)
+  C->>B: POST /internal/cube/sql-auth (cube token)
+  B-->>C: 200 {username} or 401
+  C-->>T: rows, built from the semantic model
 ```
+
+### What the platform team does
+
+Nothing, in the standard install: the cube image listens on 15432
+(`CUBEJS_PG_SQL_PORT`) and `compose.yaml` publishes it as `CUBE_SQL_PORT`
+(default 15432). Optional settings in `.env`:
 
 ```bash
-# .env
-CUBE_SQL_USER=bi_reader
-CUBE_SQL_PASSWORD=<long random password>
-
-docker compose up -d cube     # or: podman compose up -d cube
+CUBE_SQL_PORT=15432          # the host port BI tools use
+CUBE_SQL_HOST=bi.example.com # when BI tools reach the host under another name
 ```
 
-Kubernetes: the same three variables on the cube Deployment (password from a
-Secret) and a Service, or internal load balancer, on port 15432.
+Kubernetes: the cube Service has a `sql` port (15432) inside the cluster. For
+tools outside the cluster, expose it with an internal load balancer and set
+`CUBE_SQL_HOST` / `CUBE_SQL_PORT` on the backend to that address.
 
 Security notes:
 
 - The SQL API is read-only: it answers queries over the model and never writes.
-- Its user sees every **public** cube and view. Publish views and hide raw cubes.
-- It does not go through the portal's sign-in, roles or audit trail. Expose the
-  port on an internal network or VPN only, or behind a TLS-terminating proxy.
-- Rotate by changing `CUBE_SQL_PASSWORD` and restarting the cube service.
+- A login sees every **public** cube and view. Publish views and hide raw cubes.
+- Keep the port on the internal network or VPN, like the portal itself, or
+  behind a TLS-terminating proxy. Passwords are 32-byte random tokens.
 
 ### BI tools
 
-Connect as to a PostgreSQL database: host = the portal host, port 15432,
-database `cube` (any name works), user and password from above.
+Connect as to a PostgreSQL database with the details on the Connect BI & AI tab:
+host = the portal host, port 15432, database `cube` (any name works), your
+portal username and the SQL password you created.
 
 | Tool | Connector and mode |
 |---|---|
 | Power BI | PostgreSQL database, **DirectQuery** (numbers stay governed; don't re-aggregate measures in DAX) |
 | Tableau | PostgreSQL, **Live** connection |
 | Excel | PostgreSQL ODBC driver (psqlODBC) DSN, then Get Data → From ODBC |
-| Superset / Metabase | PostgreSQL database, `postgresql://bi_reader:<pw>@host:15432/cube` |
+| Superset / Metabase | PostgreSQL database, `postgresql://<username>:<password>@host:15432/cube` |
 
 Queries use `MEASURE()` for measures and group by dimensions; Cube writes the
 joins and aggregation:
@@ -186,7 +203,7 @@ ORDER BY revenue DESC;
 ```python
 import os, pandas as pd, psycopg
 with psycopg.connect(host="portal-host", port=15432, dbname="cube",
-                     user="bi_reader", password=os.environ["CUBE_SQL_PASSWORD"]) as conn:
+                     user="<username>", password=os.environ["PORTAL_SQL_PASSWORD"]) as conn:
     df = pd.read_sql("SELECT status, MEASURE(count) AS orders FROM sales GROUP BY 1", conn)
 ```
 
@@ -195,7 +212,7 @@ with psycopg.connect(host="portal-host", port=15432, dbname="cube",
 | Option | Fit for the portal |
 |---|---|
 | **Ask AI** in the portal | Ready now; uses the semantic layer with the portal's sign-in and permissions |
-| **Postgres MCP server on the SQL API** | **Recommended** for external assistants: one MCP server, read-only user, agents see views and measures instead of raw tables |
+| **Postgres MCP server on the SQL API** | **Recommended** for external assistants: one MCP server with your own SQL login, agents see views and measures instead of raw tables |
 | Cube's official MCP server | Cube Cloud only (hosted endpoint with OAuth, Premium/Enterprise plans). Not available for the self-hosted Cube Core the portal runs |
 | Community Cube MCP servers on the REST API | Not recommended: they need `CUBE_API_SECRET` |
 
@@ -208,7 +225,7 @@ open-source `postgres-mcp` server:
     "semantic-layer": {
       "command": "uvx",
       "args": ["postgres-mcp", "--access-mode=restricted"],
-      "env": { "DATABASE_URI": "postgresql://bi_reader:<password>@portal-host:15432/cube" }
+      "env": { "DATABASE_URI": "postgresql://<username>:<password>@portal-host:15432/cube" }
     }
   }
 }
