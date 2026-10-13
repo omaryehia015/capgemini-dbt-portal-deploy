@@ -89,6 +89,34 @@ and service volumes): compose's one-off `upgrade` service
 database and volume before the backend first starts, and leaves the old ones
 as a backup. On Kubernetes, see [ONBOARDING.md](ONBOARDING.md).
 
+## Environments (Dev, UAT, Prod...)
+
+One portal is a window on every environment of the client. The browser sends
+the environment it shows in the `X-Portal-Env` header (and the `portal_env`
+cookie, for iframes and downloads); the backend keeps it for the whole request
+and hands it to the job it starts, so the warehouse login, the dbt target, the
+Airflow and the dbt files all follow it.
+
+```mermaid
+flowchart LR
+  B[Browser<br/>picker: Dev · UAT · Prod] -- "X-Portal-Env" --> A[backend]
+  A -- "login of that env" --> W[(Dev / UAT / Prod<br/>warehouse)]
+  A -- "REST" --> F[Dev / UAT / Prod<br/>Airflow]
+  F -- "runs the image" --> C[container: dbt build]
+  C -- "POST /api/artifacts/prod<br/>(upload token)" --> A
+  A --> D[/"/data/artifacts/&lt;env&gt;<br/>manifest, catalog, run results"/]
+```
+
+- `portal_environments` (execution) holds each environment: its warehouse
+  connection (secrets encrypted), its Airflow, whether it is protected, where
+  its dbt files come from, and the hash of its upload token.
+- A protected environment refuses every job (dbt runs, reports, onboarding,
+  schedules) and every DAG trigger or pause: checked when the job is submitted
+  and again on the worker.
+- Docs, lineage, the catalog and test results read the environment's uploaded
+  (or shared-folder) dbt files; an environment without any reads the project's
+  own `target/`, as before.
+
 ## Versions and compatibility
 
 Each repo releases on its own (`vX.Y.Z` tag → images `X.Y.Z`, `X.Y`,
