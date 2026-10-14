@@ -142,26 +142,44 @@ fi
 for pair in "${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}"; do set_env "${pair%%=*}" "${pair#*=}"; done
 [[ ${#EXTRA_ENV[@]} -gt 0 ]] && say "Applied ${#EXTRA_ENV[@]} setting(s) from $ANSWERS"
 
-# The kit's releases.yml is only as new as the kit: fetch the current one, so
+# The kit's files are only as new as the kit: fetch the current ones, so
 # `--release latest` and `manage.sh upgrade` reach releases made since it was
-# downloaded. Only in an unpacked kit (a repo checkout keeps its own file).
-refresh_releases() {
-    local url="https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/releases.yml" tmp
-    [[ "$ROOT" == "$here" ]] && command -v curl >/dev/null 2>&1 || return 0
+# downloaded, and run with the compose files those releases expect (new ports,
+# services, settings). Only in an unpacked kit (a repo checkout keeps its own
+# files). A replaced compose file is kept as <name>.bak.
+fetch_kit_file() { # <file> <pattern a valid copy contains>
+    local url="https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/$1" tmp
     tmp="$(mktemp)"
     if { curl -fsSL -m 20 -o "$tmp" "$url" 2>/dev/null \
         || { [[ -n "${PORTAL_TOKEN:-}" ]] && curl -fsSL -m 20 -H "Authorization: Bearer $PORTAL_TOKEN" -o "$tmp" "$url" 2>/dev/null; }; } \
-        && grep -q '^latest:' "$tmp"; then
-        cat "$tmp" > releases.yml
+        && grep -q "$2" "$tmp"; then
+        if ! cmp -s "$tmp" "$1"; then
+            [[ "$1" == releases.yml || ! -f "$1" ]] || cp "$1" "$1.bak"
+            cat "$tmp" > "$1"
+        fi
+        rm -f "$tmp"
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+refresh_kit() {
+    [[ "$ROOT" == "$here" ]] && command -v curl >/dev/null 2>&1 || return 0
+    if fetch_kit_file releases.yml '^latest:'; then
         ok "Release list updated (latest: $(sed -n 's/^latest: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' releases.yml))"
     else
         warn "Could not fetch the current release list: using the one in this kit."
     fi
-    rm -f "$tmp"
+    local file
+    for file in compose.yaml compose.single.yaml; do
+        [[ -f "$file" ]] || continue
+        fetch_kit_file "$file" '^services:' || warn "Could not fetch the current $file: using the one in this kit."
+    done
 }
 
 if [[ -n "$RELEASE" ]]; then
-    refresh_releases
+    refresh_kit
     [[ "$RELEASE" == latest ]] && RELEASE="$(sed -n 's/^latest: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' releases.yml)"
     block="$(awk -v r="  \"$RELEASE\":" '$0==r{f=1;next} f&&/^  "/{f=0} f' releases.yml)"
     [[ -n "$block" ]] || fail "Release '$RELEASE' is not in releases.yml."

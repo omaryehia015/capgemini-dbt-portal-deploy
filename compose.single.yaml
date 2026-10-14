@@ -39,6 +39,11 @@ services:
       CUBEJS_API_SECRET: ${CUBE_API_SECRET}
       PORTAL_SEMANTIC_URL: http://backend:8000
     expose: ["4000"]
+    # Cube's SQL API (Postgres protocol) for BI tools, notebooks and AI agents.
+    # No shared password: each user makes a login on the Semantic Modeling page,
+    # and Cube asks the backend to check it on every connection.
+    ports:
+      - "${CUBE_SQL_PORT:-15432}:15432"
 
   frontend:
     image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-frontend:${FRONTEND_TAG:-latest}
@@ -47,9 +52,13 @@ services:
       backend: { condition: service_healthy }
     ports:
       - "${PORTAL_PORT:-8080}:8080"
+      # AIRFLOW_UI_PORT publishes the Airflow UI proxy; unset, 8082 gets an
+      # unused random host port (nothing listens on it).
+      - "${AIRFLOW_UI_PORT:+${AIRFLOW_UI_PORT}:}8082"
     environment:
       BACKEND_UPSTREAM: backend:8000
       AIRFLOW_UPSTREAM: ${AIRFLOW_UPSTREAM:-}
+      AIRFLOW_UI_PORT: ${AIRFLOW_UI_PORT:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

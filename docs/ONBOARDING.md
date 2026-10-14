@@ -360,12 +360,15 @@ Cube reads its configuration from the backend's `/internal/cube` API
 The portal never talks to the warehouse directly except through dbt and thin
 metadata clients for the pages that read warehouse tables (Elementary, FinOps,
 SQL Linter, Profiler, Ask AI): [app/services/warehouse/](https://github.com/omaryehia015/capgemini-dbt-portal-backend/blob/main/app/services/warehouse/).
-Those pages work on **Snowflake and Databricks** today; on any other adapter dbt
-runs and the reports work, and the warehouse pages say they are not available.
+Those pages work on **Snowflake, Databricks and BigQuery** today. The Setup
+Assistant shows the other adapters (Redshift, PostgreSQL, others) as "coming
+soon"; a project already set up on one keeps working: dbt runs and the reports
+work, and the warehouse pages say they are not available.
 
 **The simplest way is the Setup Assistant's Warehouse step**: pick the platform,
 sign in (Databricks: server hostname, HTTP path of a SQL warehouse, and a personal
-access token or a service principal's OAuth secret), and the portal keeps the login
+access token or a service principal's OAuth secret; BigQuery: the GCP project, the
+service account's JSON key and the location of the datasets), and the portal keeps the login
 encrypted, writes a `portal` target into `profiles.yml` that holds only
 `env_var()` references, and passes the values to dbt and the metadata pages
 (`DBT_WH_*`, plus `DBT_WH_TYPE`, which tells the pages the platform).
@@ -378,7 +381,10 @@ the profile. Snowflake:
 `profiles.yml` already used them). Databricks: `DBT_WH_TYPE=databricks`,
 `DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH`, `DATABRICKS_TOKEN` (or
 `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`), with `DBT_PKG_DATABASE`
-naming the metadata catalog.
+naming the metadata catalog. BigQuery: `DBT_WH_TYPE=bigquery`, `DBT_WH_PROJECT`
+(or `GOOGLE_CLOUD_PROJECT`), the key as JSON in `DBT_WH_KEYFILE_JSON` (or a key
+file in `GOOGLE_APPLICATION_CREDENTIALS`), `DBT_WH_LOCATION` (default `US`), with
+`DBT_PKG_DATABASE` naming the metadata project.
 
 **FinOps on Databricks** reads the Unity Catalog system tables through
 capgemini_dbt_core's FinOps models (`dbt run --select capgemini_dbt_core.finops`):
@@ -386,6 +392,27 @@ the login dbt runs as needs `USE CATALOG` on `system` and `USE SCHEMA` + `SELECT
 on `system.billing`, `system.query` and `system.compute` (granted by a metastore
 admin; the system schemas must be enabled). On Snowflake FinOps still comes from
 `dbt_snowflake_monitoring`.
+
+**BigQuery** needs a service account with BigQuery Data Editor and BigQuery Job
+User; **FinOps on BigQuery** comes from the same core models, over
+[dbt_bigquery_monitoring](https://hub.getdbt.com/bqbooster/dbt_bigquery_monitoring/latest/)
+when the client ticks it in the Setup Assistant's packages (offered only on
+BigQuery, the way dbt_snowflake_monitoring is offered only on Snowflake), else
+over the region's `INFORMATION_SCHEMA.JOBS`. Either way the login also needs
+BigQuery Resource Viewer (`bigquery.jobs.listAll`) to see every job, not only its
+own, and each job is priced by bytes billed on demand or by slot-hours on a
+reservation. With the package its prices apply (`per_billed_tb_price`,
+`hourly_slot_price`), the portal passes it the region (`DBT_BQ_MONITORING_REGION`
+from the connection's location), and storage cost is added when it reads the
+Cloud Billing export (`enable_gcp_billing_export`). Without it:
+`finops_bigquery_price_per_tib` (6.25 USD) and `finops_bigquery_slot_hour_price`
+(0.06 USD), and no storage. Some of the package's storage models need
+project-wide metadata access (`INFORMATION_SCHEMA.TABLE_STORAGE`); without it
+they fail on their own and FinOps compute cost is not affected. Onboarding's provisioning step creates the metadata datasets in the
+location and grants the service account BigQuery Data Editor on them; the
+metadata project itself must exist. A project in the BigQuery sandbox (no
+billing account) refuses INSERT and MERGE, so Elementary, incremental models and
+the SQL Linter history need billing enabled.
 
 **You almost never set these yourself.** The backend images' [docker-entrypoint.sh](https://github.com/omaryehia015/capgemini-dbt-portal-backend/blob/main/docker-entrypoint.sh)
 loads the mounted/cloned project's own `.env` (whatever sits next to its
@@ -440,16 +467,45 @@ Where `profiles.yml` lives:
    above makes this safe — no secret is in the file).
 3. `~/.dbt/profiles.yml` inside the container.
 
-**Adapters in the image**: dbt-snowflake, dbt-databricks, dbt-redshift and
-dbt-postgres are in the backend image. Another one (BigQuery, DuckDB, Spark,
+**Adapters in the image**: dbt-snowflake, dbt-databricks, dbt-bigquery,
+dbt-redshift and dbt-postgres are in the backend image. Another one (DuckDB, Spark,
 ClickHouse, ...): add it with the `EXTRA_PIP_PACKAGES` build arg
-— `podman build --build-arg EXTRA_PIP_PACKAGES="dbt-bigquery~=1.8.0" .` in the backend repo
+— `podman build --build-arg EXTRA_PIP_PACKAGES="dbt-duckdb" .` in the backend repo
 (compose.build.yaml: set `EXTRA_PIP_PACKAGES` in `.env`). The managed semantic
 layer (Cube) supports Snowflake, PostgreSQL, Redshift and BigQuery; Databricks
-needs Cube's JDBC driver and comes later.
+needs Cube's JDBC driver and comes later. How dbt and Cube work together, and how
+to open the semantic layer to BI tools and AI agents (SQL API, MCP):
+[SEMANTIC_LAYER.md](SEMANTIC_LAYER.md).
 
-**Multiple targets** (dev/staging/prod): set `DBT_TARGET` per deployment. It
-overrides the profile's own `target:` key without touching the file.
+**Several environments (Dev, UAT, Prod...)**: one portal shows them all. An
+admin adds them under Home → Environments; each has its own warehouse login
+(set up in the Setup Assistant while that environment is picked at the top of
+the page), its own dbt target and its own Airflow. The portal writes one
+`profiles.yml` output per environment (the environment's id, e.g. `uat`; the
+first one keeps `portal`), all with the same `env_var()` names: each dbt process
+gets the values of the environment it runs in, so a project that checks
+`target.name` sees the right one.
+
+Each environment has a kind:
+
+| Kind | What the portal does there |
+|---|---|
+| **Development** | Everything, and it is the only place the dbt editor and the DAG Studio work: code is written in Dev and reaches the others through git. |
+| **Test** (UAT, QA) | dbt runs, tests, schedules, Airflow triggers. No code editing. |
+| **Production** | Read-only: no dbt runs, schedules or DAG triggers (refused by the backend too); its runs come from the orchestrator after a merge. Elementary, FinOps and Airflow are watched, and docs, lineage and the Elementary report are generated (read-only queries). |
+
+**dbt files per environment, no upload**: a Development environment uses the
+project's `target/`; every other one gets its own `target/env/<id>/` (dbt is
+given `DBT_TARGET_PATH`). Docs and lineage for UAT or Prod come from
+`dbt docs generate` run by the portal against that environment's warehouse,
+from the code the portal has: the Generate button on the dbt Docs page, or on
+the environment's row under Home → Environments. Test results come from
+Elementary's tables in that environment's warehouse.
+
+The **default** environment is the one pages open on (normally Prod). A portal
+upgraded from a single connection gets one environment, "Main" (Development),
+with that connection: nothing changes until an admin adds more. `DBT_TARGET`
+set on the container still wins for a deployment that manages its own profile.
 
 ## 5. Portal accounts and RBAC
 
@@ -523,6 +579,64 @@ different command.
 portal or Airflow will trigger it, so it never runs twice. Access follows the
 `airflow.manage` permission ("Orchestration & Ingestion": Admin and Data
 Engineer by default), and every sync and cancel lands in the audit trail.
+## 5b. Ingestion Hub, DAG Studio and other ETL tools
+
+**Ingestion Hub** (sidebar → Ingestion & Orchestration) is where a client
+chooses how data reaches the warehouse. It has one card per kind of client:
+
+| The client… | What the portal gives them |
+|---|---|
+| orchestrates in code with **Airflow** | Connect an existing Airflow (Modules page), or install one next to the portal (Modules → *Install on this host*). Developers write DAGs in the **DAG Studio** (Airflow → *DAG Studio* tab) either way. |
+| wants **low-code connectors** | Airbyte, connected or installed as in section 5a. |
+| already runs **another ETL tool** (Fivetran, ADF, Informatica, Talend, NiFi, Glue…) | An admin adds its name and URL; it gets its own entry under *Ingestion Hub* in the menu, opened in a new tab or inside the portal. |
+
+Each card links to setup guides: the official documentation and video
+walkthroughs, plus any recordings or runbooks an admin adds (a single
+YouTube video plays in place). Tools and links are stored in the portal
+database and every change is in the audit trail.
+
+**Turning tools off and on.** Once Airflow or Airbyte is connected, its card
+has an On/Off switch, and so does every added tool. Admins and anyone with
+`dbt.develop` or `airflow.manage` (developers) can use it: off takes the
+tool's page, menu entry and API away for everyone but keeps its connection
+and settings; on brings it back as it was. Switching never changes settings,
+so connecting a tool or editing it stays with admins.
+
+**DAG Studio** is for developing the team's existing DAGs. It is a tab of
+the Airflow page (sidebar → Airflow → *DAG Studio*; the old `/dag-studio`
+address still leads there), so it appears only once Airflow is connected.
+Developers with `dbt.develop` but not `airflow.manage` see only this tab.
+It opens on a source:
+
+| Source | How | Saving |
+|---|---|---|
+| **Folder on your computer** | *Choose folder…*: any folder anywhere on the user's machine (a local clone, Airflow's `dags/`, a network drive), nothing shared at install. The browser reads it (Edge or Chrome) and uploads the editable files as the studio's working copy. | Each save goes to the portal's copy and, from the browser that chose the folder, straight into the folder. *Reload from folder* reads it again. Other browsers see the portal's copy and can choose the folder themselves. |
+| **Folder the portal can reach** | A folder under the projects folder shared at install, entered relative to it or by its path on the computer (`C:\Users\me\projects\airflow\dags`), or any absolute path on the portal's own server (an install without containers, a volume mounted by hand). | Saved files are live in the folder. |
+| **Git repository** (GitHub, GitLab, Azure Repos, Bitbucket), when the DAGs are not in a folder | URL, branch, the DAGs folder in the repository, and a token with read/write access (GitHub: fine-grained, *Contents: read and write*). The portal clones it into its data volume; the token is stored encrypted. | Save, then **Commit & push** from the studio, in the portal user's name. **Pull** brings in others' work. Airflow deploys from the repository as it already does. |
+| **`AIRFLOW_DAGS_DIR`** | Set at install to Airflow's own `dags/` folder mounted into the backend; it overrides the others. | Live on Airflow's next parse. |
+
+```yaml
+# compose.yaml, backend service (and the worker on the full stack)
+    environment:
+      AIRFLOW_DAGS_DIR: /airflow/dags
+    volumes:
+      - /opt/airflow/dags:/airflow/dags      # the folder Airflow's own compose mounts as dags/
+```
+
+Connecting or changing the source needs `airflow.manage`; editing, pulling
+and pushing need `dbt.develop` or `airflow.manage`. The studio checks files
+as you type (syntax, missing DAG, dag_id used twice, dynamic `start_date`,
+`schedule_interval`, work at import time, hard-coded credentials, deprecated
+imports), has templates, and shows Airflow's own import errors when the
+Airflow module has an API user.
+
+**Copilot** works like the one on dbt Development: it sees the open file and
+the selection, reads, searches and checks the rest of the DAGs folder with
+tools (shown as steps while it works), and proposes changes as diffs to
+review, accept into the editor, or reject. It never saves or pushes. It uses
+the AI provider from the Setup Assistant; without one it answers from the
+studio's checks.
+
 ## 6. Every environment variable (reference)
 
 Full template with inline comments: [.env.example](../.env.example). Grouped
@@ -542,6 +656,9 @@ here by what they control; the backend's `app/core/config.py`,
 | `JWT_SECRET` | generated (single node only) | Session signing key, the same for every service. Also signs service-to-service calls. |
 | `CUBE_API_SECRET` | generated (single node only) | Shared by the backend and Cube (Cube's `CUBEJS_API_SECRET`). |
 | `CUBE_API_URL` | `http://cube:4000` | Where the backend reaches Cube. |
+| `CUBE_AUTO_REGENERATE` | `true` | After a successful dbt job that changed `manifest.json`, regenerate the semantic model with the dbt folders last picked on the Semantic page. `false`: only the Generate button does. Needs the model generated once. |
+| `CUBE_SQL_PORT` | `15432` | Host port of Cube's SQL API (Postgres protocol) for BI tools, notebooks and AI agents. Users create their own login on the Semantic Modeling page; the backend checks it on each connection. The backend shows it on the Connect BI & AI tab. |
+| `CUBE_SQL_HOST` | the portal's host name | The host name users' BI tools connect to, when it differs from the one the portal is opened with (shown on the Connect BI & AI tab). |
 | `PORTAL_SEMANTIC_URL` | `http://semantic:8000` | Cube container: where it reads its configuration (`http://backend:8000` in both compose files). |
 | `BACKEND_UPSTREAM` | `backend:8000` | Frontend container: where the gateway sends `/api` (section 3). |
 | `PORTAL_DATA_DIR` | `/data` in the images | Files the backend keeps outside its database: the semantic layer's state, the dbt editor's trash, the stored-credentials key, a single node's SQLite file. |
@@ -583,11 +700,13 @@ here by what they control; the backend's `app/core/config.py`,
 | `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `json` | Logging. `json` writes one object per line with a `request_id`; `text` is easier to read on a laptop. |
 | `METRICS_ENABLED` | `true` | Prometheus metrics at `/metrics` on the backend's port (not proxied by the gateway, so internal only). |
 | `SCHEDULER_ENABLED` | `true` | Fire dbt Runner schedules. Runs on the workers (or the single node); safe with several, each slot is claimed once in the database. |
-| `NOTIFY_SLACK_WEBHOOK` / `NOTIFY_TEAMS_WEBHOOK` / `NOTIFY_EMAIL_TO` | — | Default failure-alert channels. Admins can change them at runtime (Governance → Failure alerts); the stored values win. |
+| `NOTIFY_SLACK_WEBHOOK` / `NOTIFY_TEAMS_WEBHOOK` / `NOTIFY_EMAIL_TO` | — | First failure-alert channels. Read once, on the first start: they become default channels named `slack`, `teams` and `email`, managed from then on in Governance → Failure alerts. |
 | `PORTAL_BASE_URL` | — | Public URL of the portal, so alerts link straight to the failed run. |
-| `AIRFLOW_URL` / `AIRFLOW_WEBSERVER_URL` | — | Default URL shown on the Airflow page; users can still enter one at runtime. |
+| `AIRFLOW_URL` / `AIRFLOW_WEBSERVER_URL` | — | Default URL shown on the Airflow page; users can still enter one at runtime. With several environments, it is the default environment's Airflow; the others are set under Home → Environments. |
 | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | — | Service account for the Airflow REST API (with `AIRFLOW_URL`): DAG list, recent runs, trigger, pause. Without them the Airflow page only probes `/health` and embeds the UI. |
-| `AIRFLOW_UPSTREAM` | — | Frontend container: `host:port` of an Airflow webserver to serve under `/airflow-ui/` on the portal's origin, so the Airflow page can embed it (a cross-site iframe loses Airflow's session cookie and its login fails with "CSRF session token is missing"). Airflow must run with `AIRFLOW__WEBSERVER__BASE_URL=http://<portal host>/airflow-ui`. |
+| `AIRFLOW_DAGS_DIR` | — | Airflow's `dags/` folder mounted into the backend: the DAG Studio edits it directly, instead of a repository or folder chosen in the studio (section 5b). |
+| `AIRFLOW_UPSTREAM` | — | Frontend container: `host:port` of an Airflow webserver to serve under `/airflow-ui/` on the portal's origin, so the Airflow page can embed it (a cross-site iframe loses Airflow's session cookie and its login fails with "CSRF session token is missing"). Airflow must run with `AIRFLOW__WEBSERVER__BASE_URL=http://<portal host>/airflow-ui`, unless `AIRFLOW_UI_PORT` is set. |
+| `AIRFLOW_UI_PORT` | — | With `AIRFLOW_UPSTREAM`: host port that serves the Airflow webserver at its root (container port 8082), for an Airflow whose base URL you cannot change. Another port of the portal's host is the same site, so the login works in the iframe. Only Airflow's `session` cookie is forwarded to it. Plain HTTP: behind HTTPS use `/airflow-ui/`. |
 | `AIRBYTE_URL` | — | Airbyte root the backend calls (section 5a): `http://host.docker.internal:8000` for `abctl` on the same host, `https://api.airbyte.com/v1` for Airbyte Cloud. Unset = the Airbyte page shows the install steps. |
 | `AIRBYTE_CLIENT_ID` / `AIRBYTE_CLIENT_SECRET` | — | API application credentials (`abctl local credentials`, or an Airbyte Cloud application). Only omit for an install with auth disabled. |
 | `AIRBYTE_WORKSPACE_ID` | all workspaces | Limit the Airbyte page to one workspace. |
@@ -689,10 +808,38 @@ who last saved it, and stops firing if that user is disabled or loses
 `dbt.execute`. A slot missed while every worker was down runs late only
 within 5 minutes; older ones are skipped, not replayed.
 
-**Failure alerts.** Governance → Failure alerts (Admin role): Slack and Teams
-webhooks, email recipients, and whether warnings and manual runs alert too.
-*Send test alert* checks each channel. Webhook URLs are never shown again
-after saving; the page displays a masked form.
+**Failure alerts.** Governance → Failure alerts. Admins add *channels*: any
+number of Slack or Teams webhooks and email lists, each under a name such as
+`finance-data`, and mark some as *default*. Webhook URLs are never shown again
+after saving; the page displays a masked form. Admins also decide whether
+warnings and manual runs alert. Anyone with the `alerts.manage` permission
+(Admin and Data Engineer by default; grant it to other roles under Users &
+roles) writes *routing rules* that send failures to channels by dbt tag,
+`meta.owner` or model name/path glob, and can send a test to any channel. A
+rule can also list email addresses directly (a person, a team list), so
+specific people get their failures by email without an admin adding a channel.
+
+**Mail server.** Email channels, the addresses on rules and email sign-in
+codes go through the SMTP server an admin saves on the same page (host, port,
+STARTTLS / SSL / none, login, sender address; *Send test email* checks it).
+The password is stored encrypted and never shown again. A server saved there
+wins over the `SMTP_*` variables; *Remove* falls back to them.
+
+When a run fails, each failing test, model, seed, snapshot or source goes to
+the channel its dbt `meta.channel` (or `meta.alerts_config.channel`, as in
+Elementary) names, plus the channels of every rule it matches; anything
+unrouted goes to the default channels. Each channel gets one message listing
+its failures, with Elementary's description of the result when the project
+uses Elementary. *Check routing* shows where the last run's failures would go.
+
+```yaml
+models:
+  - name: fct_revenue
+    config:
+      meta:
+        owner: "@fin-team"
+        channel: finance-data
+```
 
 **Restarts.** Running jobs are written to the portal database and kept
 alive by the worker's heartbeat. If a worker stops, its jobs are marked failed

@@ -118,7 +118,11 @@ for anything missing.
 | Only check this machine | `-Check` | `--check` |
 
 Run the script again at any time to upgrade (`--release <newer>`) or change
-the port. Accounts, run history and settings are kept.
+the port. Accounts, run history and settings are kept. An upgrade also fetches
+the current `releases.yml`, `compose.yaml` and `compose.single.yaml`, so new
+ports and services (such as the semantic layer's SQL port, 15432) arrive with
+it; a replaced compose file is kept as `<name>.bak`. Put your own changes in
+`compose.override.yaml`, not in `compose.yaml`.
 
 ## How the portal finds your project
 
