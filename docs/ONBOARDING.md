@@ -481,10 +481,13 @@ to open the semantic layer to BI tools and AI agents (SQL API, MCP):
 admin adds them under Home → Environments; each has its own warehouse login
 (set up in the Setup Assistant while that environment is picked at the top of
 the page), its own dbt target and its own Airflow. The portal writes one
-`profiles.yml` output per environment (the environment's id, e.g. `uat`; the
-first one keeps `portal`), all with the same `env_var()` names: each dbt process
-gets the values of the environment it runs in, so a project that checks
-`target.name` sees the right one.
+`profiles.yml` output per environment, named after it (e.g. `uat`; the first
+one keeps `portal`), so a project that checks `target.name` sees the right one.
+Each output reads its own variables: the first one `DBT_WH_*`, the others
+`DBT_WH_<ENV>_*` (e.g. `DBT_WH_UAT_PASSWORD`), so it is clear which login an
+output uses and dbt run by hand cannot pick up another environment's login.
+The portal gives each dbt process the values of the environment it runs in,
+and saving a login rewrites that environment's output when it is already there.
 
 Each environment has a kind:
 

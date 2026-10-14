@@ -12,6 +12,12 @@ async function signIn(page: Page) {
   await expect(page).toHaveURL(/\/$/);
 }
 
+/** Pick an environment in the sidebar's switcher. */
+async function pick(page: Page, name: RegExp) {
+  await page.getByTestId("environment-switcher").getByRole("button").first().click();
+  await page.getByRole("menuitemradio", { name }).click();
+}
+
 async function ensureEnvironment(api: APIRequestContext, name: string, kind: "dev" | "test" | "prod") {
   const list = await (await api.get("/api/environments")).json();
   const found = list.environments.find((e: { name: string }) => e.name === name);
@@ -42,10 +48,9 @@ test("environments: picker, read-only production, development pages in Dev only"
 
   // The picker shows every environment; Production locks the Runner.
   await page.goto("/dbt-runner");
-  const bar = page.getByTestId("environment-bar");
-  await expect(bar).toBeVisible();
-  await bar.getByRole("radio", { name: /E2E Prod/ }).click();
-  await expect(page.getByTestId("environment-hint")).toContainText("Production");
+  await expect(page.getByTestId("environment-switcher")).toBeVisible();
+  await pick(page, /E2E Prod/);
+  await expect(page.getByTestId("environment-hint")).toContainText("production");
   await expect(page.getByTestId("command-preview")).toContainText(/is production/);
 
   // dbt Development offers to switch to a Development environment.
@@ -54,7 +59,7 @@ test("environments: picker, read-only production, development pages in Dev only"
 
   // A Test environment runs dbt again.
   await page.goto("/dbt-runner");
-  await page.getByTestId("environment-bar").getByRole("radio", { name: /E2E Test/ }).click();
+  await pick(page, /E2E Test/);
   await page.getByRole("button", { name: /^debug\b/i }).first().click();
   await expect(page.getByTestId("command-preview")).toContainText("dbt debug");
 
