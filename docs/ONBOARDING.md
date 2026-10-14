@@ -542,9 +542,20 @@ only for their runs in Dev; building models from their own folder requires it.
 Where credentials live:
 
 - Each environment's connection is saved in the portal (Setup Assistant →
-  Warehouse, `platform.manage`). Dev and Test get a build login; Prod gets a
-  **read-only monitoring login**: the orchestrator builds production with its
-  own credentials, which never enter the portal.
+  Warehouse, `platform.manage`). Dev gets a build login. Test and Prod get a
+  **monitoring login**: it reads your models and writes only the accelerator's
+  metadata schemas (Elementary, FinOps...); the orchestrator builds those
+  environments with its own credentials, which never enter the portal.
+- What runs where:
+
+  | | Dev | Test / UAT and Prod |
+  |---|---|---|
+  | Build your models (run, build, seed, snapshot, retry, run-operation) | yes | no: they arrive through git and the orchestrator |
+  | Refresh the accelerator's packages (`run`/`build` with `package:elementary`...; onboarding's observability step) | yes | yes, no full refresh |
+  | Tests, compile, show, docs, freshness, lint and fix, profiler | yes | yes (tests without `--store-failures`) |
+  | Refresh reports (dbt Docs, Colibri, Elementary) | anyone who can view them | anyone who can view them |
+
+  The dbt Runner hides seed, snapshot, retry and run-operation outside Dev.
 - The portal runs dbt with a `profiles.yml` it keeps itself (one output per
   environment, no credentials in it). It never writes your project's
   `profiles.yml`; copy the snippet from the Warehouse step into a developer's
