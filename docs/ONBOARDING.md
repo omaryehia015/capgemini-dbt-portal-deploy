@@ -533,6 +533,12 @@ role may open).
 `platform.manage` can be granted to another role from the matrix; changing
 users and roles always stays with the Admin role.
 
+Credentials belong to their environment and only `platform.manage` sets them.
+A run always uses the environment it is started in (another environment's
+dbt target is refused). In Dev each engineer adds **My dev login** on the dbt
+Development page: their own user/password (or key, token) and schema, used
+only for their runs in Dev; building models from their own folder requires it.
+
 - `ENVIRONMENT=production` (the default) generates a random password per
   account and prints it once in the backend log (`docker compose logs
   backend`, `kubectl logs deploy/dbt-portal-backend`). Capture it there, or
