@@ -480,36 +480,30 @@ to open the semantic layer to BI tools and AI agents (SQL API, MCP):
 **Several environments (Dev, UAT, Prod...)**: one portal shows them all. An
 admin adds them under Home → Environments; each has its own warehouse login
 (set up in the Setup Assistant while that environment is picked at the top of
-the page), its own Airflow and its own dbt files. The portal writes one
+the page), its own dbt target and its own Airflow. The portal writes one
 `profiles.yml` output per environment (the environment's id, e.g. `uat`; the
 first one keeps `portal`), all with the same `env_var()` names: each dbt process
 gets the values of the environment it runs in, so a project that checks
 `target.name` sees the right one.
 
-- **Protected** (Prod): the portal never changes it. No dbt runs, schedules,
-  reports or DAG triggers there (refused by the backend too); its code arrives
-  through git and the orchestrator. Pages still show it: Elementary and FinOps
-  read its warehouse, Docs and lineage read the dbt files its runs send.
-- **Default**: the environment pages open on (normally Prod).
-- **dbt files** of an environment whose dbt runs in the orchestrator (an Airflow
-  task, often a container deleted when it ends): either the run uploads them at
-  its end, with the environment's upload token (Environments → Create upload
-  token, kept as a secret in Airflow):
+Each environment has a kind:
 
-  ```bash
-  dbt build --target prod
-  python dbt_packages/capgemini_dbt_core/scripts/portal.py upload-artifacts       --env prod --target-dir target          # PORTAL_URL, PORTAL_TOKEN from the environment
-  # or: tar czf - -C target manifest.json run_results.json catalog.json |   #     curl --fail -H "Authorization: Bearer $PORTAL_TOKEN" --data-binary @- $PORTAL_URL/api/artifacts/prod
-  ```
+| Kind | What the portal does there |
+|---|---|
+| **Development** | Everything, and it is the only place the dbt editor and the DAG Studio work: code is written in Dev and reaches the others through git. |
+| **Test** (UAT, QA) | dbt runs, tests, schedules, Airflow triggers. No code editing. |
+| **Production** | Read-only: no dbt runs, schedules or DAG triggers (refused by the backend too); its runs come from the orchestrator after a merge. Elementary, FinOps and Airflow are watched, and docs, lineage and the Elementary report are generated (read-only queries). |
 
-  or, when the portal can read the folder dbt writes to (same machine, or a
-  shared Kubernetes volume), the environment reads that folder: nothing to add
-  to the run. `portal.py download-manifest --env prod` fetches the Prod
-  manifest back, for `dbt build --select state:modified+ --defer --state prod-state`
-  on a laptop or in CI. Add `--best-effort` to the upload so a portal that is
-  down never fails the pipeline.
+**dbt files per environment, no upload**: a Development environment uses the
+project's `target/`; every other one gets its own `target/env/<id>/` (dbt is
+given `DBT_TARGET_PATH`). Docs and lineage for UAT or Prod come from
+`dbt docs generate` run by the portal against that environment's warehouse,
+from the code the portal has: the Generate button on the dbt Docs page, or on
+the environment's row under Home → Environments. Test results come from
+Elementary's tables in that environment's warehouse.
 
-A portal upgraded from a single connection gets one environment, "Main",
+The **default** environment is the one pages open on (normally Prod). A portal
+upgraded from a single connection gets one environment, "Main" (Development),
 with that connection: nothing changes until an admin adds more. `DBT_TARGET`
 set on the container still wins for a deployment that manages its own profile.
 
@@ -718,8 +712,6 @@ here by what they control; the backend's `app/core/config.py`,
 | `AIRBYTE_WORKSPACE_ID` | all workspaces | Limit the Airbyte page to one workspace. |
 | `AIRBYTE_UI_URL` | derived from `AIRBYTE_URL` | The Airbyte UI link users' browsers open, when it differs from the URL the backend uses. |
 | `COLIBRI_DIST_DIR` | auto-discovered | Override where the Colibri static report is found. |
-| `ARTIFACT_MAX_MB` | `512` | Largest set of dbt files (uncompressed) an environment's run may upload to `/api/artifacts/<env>`. The gateway accepts bodies up to 600 MB on that path. |
-| `ARTIFACT_HISTORY` | `10` | Earlier uploads kept per environment, next to the latest, in `<data>/artifacts/<env>/`. |
 | `PREFLIGHT_ON_START` | `true` | Set `false` to skip the entrypoint's preflight checks (they run in the backend container). |
 | `PREFLIGHT_STRICT` | `false` | `true` refuses to start the container when preflight finds a failure (vs. warning and starting anyway). |
 | `PORTAL_CA_CERTS` | `<project>/.certs/` | Corporate root CA(s) for a proxy that inspects TLS (Zscaler, Netskope...): a PEM file or a folder of `*.pem`/`*.crt`. The entrypoint adds them to the public roots and points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` at the merged bundle. Symptom without it: `CERTIFICATE_VERIFY_FAILED ... self-signed certificate in certificate chain` from the AI providers or `dbt deps`. An explicit `SSL_CERT_FILE` wins. |
