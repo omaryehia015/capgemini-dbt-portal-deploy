@@ -539,6 +539,25 @@ dbt target is refused). In Dev each engineer adds **My dev login** on the dbt
 Development page: their own user/password (or key, token) and schema, used
 only for their runs in Dev; building models from their own folder requires it.
 
+Where credentials live:
+
+- Each environment's connection is saved in the portal (Setup Assistant →
+  Warehouse, `platform.manage`). Dev and Test get a build login; Prod gets a
+  **read-only monitoring login**: the orchestrator builds production with its
+  own credentials, which never enter the portal.
+- The portal runs dbt with a `profiles.yml` it keeps itself (one output per
+  environment, no credentials in it). It never writes your project's
+  `profiles.yml`; copy the snippet from the Warehouse step into a developer's
+  or the orchestrator's own profile.
+- A project `.env` is not used by runs of a managed environment. Import it once
+  into an environment's variables from the Setup Assistant (dbt project →
+  Project variables → Import). Variables are per environment.
+- An environment without a saved connection keeps the older behavior (the
+  container loads the project `.env`, or a mounted `DBT_PROFILES_DIR`).
+- Governance → Job history shows, for every dbt run, the environment, target,
+  `database.schema` and login it used, checked against what dbt recorded
+  (Verified / Discrepancy). A discrepancy is audited and alerted.
+
 - `ENVIRONMENT=production` (the default) generates a random password per
   account and prints it once in the backend log (`docker compose logs
   backend`, `kubectl logs deploy/dbt-portal-backend`). Capture it there, or
