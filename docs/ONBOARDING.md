@@ -520,7 +520,18 @@ set on the container still wins for a deployment that manages its own profile.
 Four seeded roles (Admin, Data Engineer, Data Analyst, Auditor; see the
 backend's [app/db/seed.py](https://github.com/omaryehia015/capgemini-dbt-portal-backend/blob/main/app/db/seed.py))
 exist from first start, stored in the portal database, editable
-afterward from the Governance page.
+afterward from the Governance page (permissions and the environments each
+role may open).
+
+| Role | Can do | Environments |
+|---|---|---|
+| Admin | everything: users and roles, and configuration (`platform.manage`: Setup Assistant, environments, modules, warehouse, AI, email, alert channels) | all |
+| Data Engineer | develop and run dbt, DAG Studio, Airflow/Airbyte, alert rules, job history. In Dev, connects their **own** folder (dbt project and DAGs) without affecting colleagues | all |
+| Data Analyst | reports: docs, lineage, Elementary, FinOps, Semantic, Ask AI | production |
+| Auditor | audit trail (and CSV export), read-only users and roles, every job's history | production |
+
+`platform.manage` can be granted to another role from the matrix; changing
+users and roles always stays with the Admin role.
 
 - `ENVIRONMENT=production` (the default) generates a random password per
   account and prints it once in the backend log (`docker compose logs
