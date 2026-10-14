@@ -27,21 +27,22 @@ async function ensureEnvironment(api: APIRequestContext, name: string, kind: "de
   return res.json();
 }
 
-// Environments: the picker, Production read-only, development pages only in Dev.
+// Environments: the picker, Production builds no models, development pages only in Dev.
 // Adds an "E2E Test" and an "E2E Prod" environment and removes them at the end.
-test("environments: picker, read-only production, development pages in Dev only", async ({ page }) => {
+test("environments: picker, production builds no models, development pages in Dev only", async ({ page }) => {
   await signIn(page);
   const api = page.request;
   const uat = await ensureEnvironment(api, "E2E Test", "test");
   const prod = await ensureEnvironment(api, "E2E Prod", "prod");
 
-  // The backend refuses runs in Production and the editor outside Development,
-  // but generates Production's docs (read-only).
-  const run = await api.post("/api/dbt/execute", {
+  // The backend refuses building models in Production and the editor outside
+  // Development; tests and docs run in Production.
+  const build = await api.post("/api/dbt/execute", {
     headers: { ...HEADERS, "X-Portal-Env": prod.slug },
-    data: { kind: "dbt", command: "debug" },
+    data: { kind: "dbt", command: "build" },
   });
-  expect(run.status()).toBe(403);
+  expect(build.status()).toBe(400);
+  expect(await build.text()).toContain("orchestrator");
   expect((await api.get("/api/dev/workspace", { headers: { "X-Portal-Env": uat.slug } })).status()).toBe(403);
   const docs = await api.post("/api/reports/dbt-docs/generate", { headers: { ...HEADERS, "X-Portal-Env": prod.slug } });
   expect(docs.status()).not.toBe(403);
@@ -50,8 +51,12 @@ test("environments: picker, read-only production, development pages in Dev only"
   await page.goto("/dbt-runner");
   await expect(page.getByTestId("environment-switcher")).toBeVisible();
   await pick(page, /E2E Prod/);
-  await expect(page.getByTestId("environment-hint")).toContainText("production");
+  // Said once, as a notice, not a banner on every page.
+  await expect(page.getByText(/E2E Prod is production/)).toBeVisible();
+  await page.getByRole("button", { name: /^build\b/i }).first().click();
   await expect(page.getByTestId("command-preview")).toContainText(/is production/);
+  await page.getByRole("button", { name: /^test\b/i }).first().click();
+  await expect(page.getByTestId("command-preview")).toContainText("dbt test");
 
   // dbt Development offers to switch to a Development environment.
   await page.goto("/dbt-dev");

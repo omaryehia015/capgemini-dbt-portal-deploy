@@ -493,9 +493,14 @@ Each environment has a kind:
 
 | Kind | What the portal does there |
 |---|---|
-| **Development** | Everything, and it is the only place the dbt editor and the DAG Studio work: code is written in Dev and reaches the others through git. |
-| **Test** (UAT, QA) | dbt runs, tests, schedules, Airflow triggers. No code editing. |
-| **Production** | Read-only: no dbt runs, schedules or DAG triggers (refused by the backend too); its runs come from the orchestrator after a merge. Elementary, FinOps and Airflow are watched, and docs, lineage and the Elementary report are generated (read-only queries). |
+| **Development** | Everything, and it is the only place the dbt editor, the DAG Studio and `sqlfluff fix` work: code is written in Dev and reaches the others through git. |
+| **Test** (UAT, QA) | Everything but code editing: dbt runs and builds, tests, schedules, reports, AI, the semantic layer, Airflow. |
+| **Production** | Everything but building data models: `dbt run`, `build`, `seed`, `snapshot`, `retry` and `run-operation` are refused (the backend too), because the orchestrator builds Prod after a merge. Tests, source freshness, docs, lineage, reports, profiling, Ask AI, the semantic layer, schedules of those, and Airflow (triggering a DAG is the orchestrator building) all work. |
+
+**Every page in every environment**: Elementary, FinOps, docs, lineage, Ask AI
+and the semantic layer show the environment picked in the sidebar. The semantic
+layer is one Cube tenant per environment (its own login and model); BI tools on
+the SQL API read the default environment.
 
 **dbt files per environment, no upload**: a Development environment uses the
 project's `target/`; every other one gets its own `target/env/<id>/` (dbt is
