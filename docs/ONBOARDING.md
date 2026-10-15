@@ -488,6 +488,10 @@ Each output reads its own variables: the first one `DBT_WH_*`, the others
 output uses and dbt run by hand cannot pick up another environment's login.
 The portal gives each dbt process the values of the environment it runs in,
 and saving a login rewrites that environment's output when it is already there.
+Home → Environments shows, for each one, its login (tested or not), its dbt
+docs and its Airflow, and suggests what to do next (a login to set up, a
+production environment to add or to open on); the Setup Assistant's warehouse
+step is done once every environment has a tested login.
 
 Each environment has a kind:
 
