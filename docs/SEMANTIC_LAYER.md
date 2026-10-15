@@ -50,6 +50,19 @@ After the first Generate, a successful dbt job that writes a newer
 `manifest.json` regenerates the model with the same folders
 (`CUBE_AUTO_REGENERATE=true`, the default).
 
+## Which warehouses
+
+The semantic engine connects to **Snowflake, PostgreSQL, Redshift and
+BigQuery** (backend `warehouse_profile.SUPPORTED`; the cube image keeps only
+their drivers). **Databricks is not supported yet**: Cube's Databricks driver
+needs a JDK and a JDBC driver the image leaves out. On a Databricks project the
+pages say so instead of offering a setup that cannot succeed (the setup strip,
+the semantic layer's connect tab, Ask AI's connection bar), Ask AI's Data
+Analyst answers with SQL on the dbt models, and the MCP server's tools reply
+that there is no governed model. Every visual names the warehouse from the
+semantic layer's login, else from the dbt project (`/api/semantic/status` and
+`/api/ask-ai/semantic` report the platform and whether the engine supports it).
+
 ## What is generated from dbt
 
 | In dbt | In Cube |
