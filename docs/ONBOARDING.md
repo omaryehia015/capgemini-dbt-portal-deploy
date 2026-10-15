@@ -645,7 +645,7 @@ chooses how data reaches the warehouse. It has one card per kind of client:
 
 | The client… | What the portal gives them |
 |---|---|
-| orchestrates in code with **Airflow** | Connect an existing Airflow (Modules page), or install one next to the portal (Modules → *Install on this host*). Developers write DAGs in the **DAG Studio** (Airflow → *DAG Studio* tab) either way. |
+| orchestrates in code with **Airflow** | Connect an existing Airflow (Setup Assistant › *Tool connections*), or install one next to the portal (*Tool connections* → *Install on this host*). Developers write DAGs in the **DAG Studio** (Airflow → *DAG Studio* tab) either way. |
 | wants **low-code connectors** | Airbyte, connected or installed as in section 5a. |
 | already runs **another ETL tool** (Fivetran, ADF, Informatica, Talend, NiFi, Glue…) | An admin adds its name and URL; it gets its own entry under *Ingestion Hub* in the menu, opened in a new tab or inside the portal. |
 
