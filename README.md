@@ -14,6 +14,11 @@ repos, each released on its own:
 Images are published to `ghcr.io/omaryehia015/capgemini-dbt-portal-<name>`.
 How the containers fit together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+**New to the team?** Start with [docs/SYSTEM_GUIDE.md](docs/SYSTEM_GUIDE.md):
+the whole accelerator end to end (repos, a dbt run, onboarding, data,
+contracts, releases), with diagrams. Changing this repo:
+[docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md).
+
 ## Run it
 
 **For a client or a shared server** (the portal API, dbt workers, PostgreSQL, Redis):
