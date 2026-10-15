@@ -4,8 +4,9 @@ The portal runs [Cube](https://cube.dev) (open-source Cube Core) as a managed
 semantic layer on top of the client's dbt project. This page explains how dbt
 and Cube work together, what the portal generates, and how tools outside the
 portal (BI, notebooks, AI agents) use the same metrics. The Semantic Layer
-page has the same guidance in its **How it works**, **AI agents & MCP** and
-**BI & apps** tabs.
+page has the same guidance in its **How it works** panel (header button) and
+its **Connect tools** tab. Its three tabs: **Overview**, **Explore & query**
+(browse the model and query it side by side) and **Connect tools**.
 
 ## Why both
 
@@ -143,11 +144,11 @@ the portal's own key to Cube. Never give that secret to a tool.
 ### Getting a personal key (each user, one click)
 
 Nobody shares a password and no administrator hands one out. On the Semantic
-Layer page, **AI agents & MCP** or **BI & apps → Create my key**:
+Layer page, **Connect tools → Create my key**:
 
 - One key per user, a random token shown once. It is the **password** of the
   user's SQL login (the login is their portal username) and the **bearer token**
-  of the MCP server. The tabs show it with a ready connection string, Python
+  of the MCP server. The tab shows it with a ready connection string, Python
   snippet and MCP configs.
 - Only a SHA-256 of it is stored (backend `CUBE_STATE_DIR/sql_logins.json`).
 - Cube's `checkSqlAuth` (cube repo `cube.js`) asks the backend
@@ -200,7 +201,7 @@ Security notes:
 
 ### BI tools
 
-Connect as to a PostgreSQL database with the details on the BI & apps tab:
+Connect as to a PostgreSQL database with the details on the Connect tools tab:
 host = the portal host, port 15432, database `cube` (any name works), your
 portal username and your personal key as the password.
 
@@ -256,7 +257,7 @@ same tools as Ask AI's Data Analyst (backend `app/services/semantic_tools.py`):
 - **Network**: it is a route of the semantic service behind the portal's own
   gateway (`/api/semantic`), so no port or setting is added.
 
-Client configuration (the AI agents & MCP tab fills in the URL and key, and
+Client configuration (the Connect tools tab fills in the URL and key, and
 has a **Test the connection** button that calls the server as an agent does):
 
 ```bash
