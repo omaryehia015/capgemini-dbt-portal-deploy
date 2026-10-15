@@ -3,8 +3,9 @@
 The portal runs [Cube](https://cube.dev) (open-source Cube Core) as a managed
 semantic layer on top of the client's dbt project. This page explains how dbt
 and Cube work together, what the portal generates, and how tools outside the
-portal (BI, notebooks, AI agents) use the same metrics. The Semantic Modeling
-page has the same guidance in its **How it works** and **Connect BI & AI** tabs.
+portal (BI, notebooks, AI agents) use the same metrics. The Semantic Layer
+page has the same guidance in its **How it works**, **AI agents & MCP** and
+**BI & apps** tabs.
 
 ## Why both
 
@@ -26,8 +27,9 @@ flowchart LR
   B --> C["Portal: Generate<br/>one cube per model"]
   H[/"dbt repo cube/ folder<br/>views, extra measures"/] --> C
   C --> D["Cube compiles<br/>(within one poll, ~5 s)"]
-  D --> E["Semantic page · Ask AI"]
-  D --> F["BI tools · notebooks · MCP<br/>(SQL API, optional)"]
+  D --> E["Semantic page · Ask AI's Data Analyst"]
+  D --> G["AI agents: Claude, Copilot, Cursor<br/>(the portal's MCP server)"]
+  D --> F["BI tools · notebooks<br/>(SQL API, optional)"]
   A -. "successful dbt job,<br/>newer manifest" .-> C
 ```
 
@@ -35,13 +37,14 @@ flowchart LR
 2. **dbt describes them**: `target/manifest.json` (models, tests, descriptions)
    and `target/catalog.json` (column types, from `dbt docs generate`).
 3. **The portal generates the Cube model** from the dbt folders picked on the
-   Semantic Modeling page (marts are pre-selected). Generated files go to the
+   Semantic Layer page (marts are pre-selected). Generated files go to the
    backend's state directory (`<PORTAL_DATA_DIR>/cube/model/generated/`), the
    dbt repo's `cube/` folder is copied next to them (`custom/`).
 4. **Cube compiles it.** `cube.js` polls the backend's `/internal/cube/state`;
    a new model version is live within one poll, no restart.
 5. **Everything reads the same definitions**: the page's explorer and query
-   builder, Ask AI, and, if published, BI and AI tools over the SQL API.
+   builder, Ask AI's Data Analyst, AI agents over the portal's MCP server, and,
+   if published, BI tools over the SQL API.
 
 After the first Generate, a successful dbt job that writes a newer
 `manifest.json` regenerates the model with the same folders
@@ -115,27 +118,30 @@ with the dbt code and survives every regeneration:
 
 | Consumer | Way in | Status |
 |---|---|---|
-| Business users in the portal | Semantic Modeling page (explore, query, CSV) | Built in |
-| Plain-language questions | Ask AI (Data tab) answers through the semantic layer | Built in |
+| Business users in the portal | Semantic Layer page (explore, query, CSV) | Built in |
+| Plain-language questions | Ask AI's **Data Analyst** answers through the semantic layer | Built in |
+| AI assistants and agents (Claude, Copilot, Cursor, custom) | The portal's **MCP server**, `/api/semantic/mcp` | Built in, below |
 | Power BI, Tableau, Excel, Superset, Metabase | Cube **SQL API** (Postgres protocol) | Built in, below |
 | Python, notebooks, JDBC/ODBC apps | SQL API with any Postgres driver | Built in, below |
-| AI assistants and agents (Claude, Copilot, Cursor, custom) | A Postgres MCP server on the SQL API | Built in, below |
 
 Cube's REST API stays internal: its tokens are signed with `CUBE_API_SECRET`,
 the portal's own key to Cube. Never give that secret to a tool.
 
-### Getting a login (each user, one click)
+### Getting a personal key (each user, one click)
 
 Nobody shares a password and no administrator hands one out. On the Semantic
-Modeling page, **Connect BI & AI → Create my SQL password**:
+Layer page, **AI agents & MCP** or **BI & apps → Create my key**:
 
-- The login is the user's portal username; the password is a random token shown
-  once, with a ready connection string, Python snippet and MCP config.
+- One key per user, a random token shown once. It is the **password** of the
+  user's SQL login (the login is their portal username) and the **bearer token**
+  of the MCP server. The tabs show it with a ready connection string, Python
+  snippet and MCP configs.
 - Only a SHA-256 of it is stored (backend `CUBE_STATE_DIR/sql_logins.json`).
 - Cube's `checkSqlAuth` (cube repo `cube.js`) asks the backend
-  (`POST /internal/cube/sql-auth`) on every new connection, so the login works
-  only while the user is active and has `observability.view`. A new password
-  replaces the old one at once; **Delete** revokes it. Both are in the audit trail.
+  (`POST /internal/cube/sql-auth`) on every new connection, and the MCP server
+  checks every request, so the key works only while the user is active and has
+  `observability.view`. A new key replaces the old one at once for both;
+  **Delete** revokes it. Both are in the audit trail.
 
 How the pieces fit:
 
@@ -145,12 +151,16 @@ sequenceDiagram
   participant B as Backend (semantic)
   participant T as BI tool / agent
   participant C as Cube SQL API :15432
+  participant A as AI agent (MCP)
   U->>B: POST /api/semantic/sql-access
-  B-->>U: login + password (shown once)
-  T->>C: connect user/password (Postgres protocol)
+  B-->>U: personal key (shown once)
+  T->>C: connect user/key (Postgres protocol)
   C->>B: POST /internal/cube/sql-auth (cube token)
   B-->>C: 200 {username} or 401
   C-->>T: rows, built from the semantic model
+  A->>B: POST /api/semantic/mcp (Authorization: Bearer key)
+  B->>B: key -> user, active, observability.view, environment
+  B-->>A: JSON-RPC result (tools run through Cube's REST API)
 ```
 
 ### What the platform team does
@@ -177,9 +187,9 @@ Security notes:
 
 ### BI tools
 
-Connect as to a PostgreSQL database with the details on the Connect BI & AI tab:
+Connect as to a PostgreSQL database with the details on the BI & apps tab:
 host = the portal host, port 15432, database `cube` (any name works), your
-portal username and the SQL password you created.
+portal username and your personal key as the password.
 
 | Tool | Connector and mode |
 |---|---|
@@ -209,57 +219,61 @@ with psycopg.connect(host="portal-host", port=15432, dbname="cube",
 
 ### AI assistants and agents (MCP)
 
+The portal is an MCP server for its semantic layer. Agents connect to
+`https://<portal>/api/semantic/mcp` with the user's personal key and get the
+same tools as Ask AI's Data Analyst (backend `app/services/semantic_tools.py`):
+
+| Tool | What it does |
+|---|---|
+| `semantic_overview` | Every view and cube with its measures, dimensions and segments (views first) |
+| `semantic_model` | Member details and descriptions, by cube name or search words |
+| `semantic_query` | A query in Cube's REST format; Cube writes the SQL, joins and aggregation. Returns columns, up to 200 rows and the generated SQL |
+
+- **Transport**: MCP Streamable HTTP, stateless: one JSON-RPC request per
+  `POST`, answered with JSON (`GET` answers 405, there is no session). Protocol
+  versions 2024-11-05 to 2025-11-25.
+- **Authentication**: `Authorization: Bearer <personal key>`. The agent acts as
+  the user: it works while the account is active and has `observability.view`,
+  and stops the moment the key is replaced or deleted.
+- **Environment**: the default one; add `X-Portal-Env: <slug>` to read another
+  (the user's role must be allowed to open it). The page writes it into the
+  snippets when the portal has several environments.
+- **Audit**: every `semantic_query` is logged as `SEMANTIC_MCP`, with the Cube
+  query and the user.
+- **Network**: it is a route of the semantic service behind the portal's own
+  gateway (`/api/semantic`), so no port or setting is added.
+
+Client configuration (the AI agents & MCP tab fills in the URL and key, and
+has a **Test the connection** button that calls the server as an agent does):
+
+```bash
+# Claude Code
+claude mcp add --transport http semantic-layer https://<portal>/api/semantic/mcp \
+  --header "Authorization: Bearer <key>"
+```
+
+```jsonc
+// Cursor: ~/.cursor/mcp.json
+{ "mcpServers": { "semantic-layer": { "url": "https://<portal>/api/semantic/mcp",
+  "headers": { "Authorization": "Bearer <key>" } } } }
+
+// VS Code / GitHub Copilot: .vscode/mcp.json (VS Code asks for the key once)
+{ "inputs": [{ "type": "promptString", "id": "semantic-layer-key", "password": true,
+               "description": "Semantic layer personal key" }],
+  "servers": { "semantic-layer": { "type": "http", "url": "https://<portal>/api/semantic/mcp",
+    "headers": { "Authorization": "Bearer ${input:semantic-layer-key}" } } } }
+
+// Claude Desktop: claude_desktop_config.json, through the mcp-remote bridge
+{ "mcpServers": { "semantic-layer": { "command": "npx",
+  "args": ["-y", "mcp-remote", "https://<portal>/api/semantic/mcp", "--header", "Authorization:${AUTH_HEADER}"],
+  "env": { "AUTH_HEADER": "Bearer <key>" } } } }
+```
+
+Other options:
+
 | Option | Fit for the portal |
 |---|---|
-| **Ask AI** in the portal | Ready now; uses the semantic layer with the portal's sign-in and permissions |
-| **Postgres MCP server on the SQL API** | **Recommended** for external assistants: one MCP server with your own SQL login, agents see views and measures instead of raw tables |
+| **The portal's MCP server** | **Recommended**: governed tools, the user's own key and permissions, audited |
+| Postgres MCP server on the SQL API | Works with the same key as the SQL password; the agent sees views and measures as tables. Cube emulates only part of Postgres's catalog (no index advice or `pg_stat_statements`) |
 | Cube's official MCP server | Cube Cloud only (hosted endpoint with OAuth, Premium/Enterprise plans). Not available for the self-hosted Cube Core the portal runs |
 | Community Cube MCP servers on the REST API | Not recommended: they need `CUBE_API_SECRET` |
-
-Example MCP client configuration (Claude Desktop, VS Code, Cursor) with the
-open-source `postgres-mcp` server:
-
-```json
-{
-  "mcpServers": {
-    "semantic-layer": {
-      "command": "uvx",
-      "args": ["postgres-mcp", "--access-mode=restricted"],
-      "env": { "DATABASE_URI": "postgresql://<username>:<password>@portal-host:15432/cube" }
-    }
-  }
-}
-```
-
-Cube emulates the parts of Postgres's catalog that BI tools use, not all of
-it: MCP tools that list tables and run `SELECT` work, tools that read Postgres
-internals (index advice, `pg_stat_statements`) do not. The SQL API cannot
-write, so if a server's read-only mode wraps queries in a transaction Cube
-rejects, its unrestricted mode is still safe. Test the chosen server against
-the client's model before rolling it out.
-
-Give the agent short instructions so it uses the layer well:
-
-```text
-You answer data questions through a Cube semantic layer reached as a Postgres database.
-- Each table is a cube or a view; prefer views. List them before guessing names.
-- Select measures as MEASURE(<name>) and GROUP BY every other column.
-  Never SUM/AVG a measure yourself and never join tables: views already hold the joins.
-- Read column descriptions to choose fields, and say which view and measures you used.
-```
-
-Agents choose fields from their descriptions, so the AI readiness of the layer
-is mostly the dbt documentation of the marts. The Overview tab on the Semantic
-Modeling page shows the share of described fields and other model checks.
-
-## Operations
-
-- Supported warehouses for the semantic layer: Snowflake, PostgreSQL, Redshift
-  and BigQuery (Databricks needs Cube's JDBC driver and comes later).
-- Cube is stateless: login and model come from the backend (`/internal/cube`,
-  contract version in `cube_manager.CONTRACT_VERSION` and `cube.js`).
-- Logs: `docker compose logs cube`. Settings: `CUBE_API_SECRET`,
-  `CUBE_API_URL`, `CUBE_AUTO_REGENERATE`, `PORTAL_SEMANTIC_URL` (see
-  [ONBOARDING.md](ONBOARDING.md)).
-- Code: backend `app/services/cube_model.py` (generation),
-  `app/services/cube_manager.py` (state, versions), cube repo `cube.js`.

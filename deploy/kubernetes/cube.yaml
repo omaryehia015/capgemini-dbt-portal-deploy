@@ -17,7 +17,7 @@ spec:
         - name: cube
           image: capgemini-dbt-portal-cube
           # 15432: the SQL API for BI tools and agents (per-user logins from the
-          # Semantic Modeling page, checked by the backend).
+          # Semantic Layer page, checked by the backend).
           ports: [{ containerPort: 4000 }, { containerPort: 15432, name: sql }]
           env:
             - name: CUBEJS_API_SECRET
