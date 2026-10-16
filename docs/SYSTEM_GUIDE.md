@@ -25,7 +25,7 @@ BigQuery). The accelerator gives them, without installing Python or dbt:
 mindmap
   root((dbt Portal))
     Build
-      Data Modeling: shared DBML designs, two-person approval
+      Data Modeling: designs in folders, drawn visually or in DBML, two-person approval
       dbt Runner and schedules
       dbt Development IDE in the browser
       AI model and test generation
