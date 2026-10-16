@@ -767,6 +767,7 @@ here by what they control; the backend's `app/core/config.py`,
 | `SCHEDULER_ENABLED` | `true` | Fire dbt Runner schedules. Runs on the workers (or the single node); safe with several, each slot is claimed once in the database. |
 | `NOTIFY_SLACK_WEBHOOK` / `NOTIFY_TEAMS_WEBHOOK` / `NOTIFY_EMAIL_TO` | — | First failure-alert channels. Read once, on the first start: they become default channels named `slack`, `teams` and `email`, managed from then on in Governance → Failure alerts. |
 | `PORTAL_BASE_URL` | — | Public URL of the portal, so alerts link straight to the failed run. |
+| `DESIGN_REMINDER_DAYS` / `DESIGN_ESCALATION_DAYS` | `7` / `30` | Data Modeling: after the first, a design change still waiting is shown as overdue (banner) to the developer or reviewer who has to act; after the second, it is shown to every reviewer and reported once to the default alert channels. |
 | `AIRFLOW_URL` / `AIRFLOW_WEBSERVER_URL` | — | Default URL shown on the Airflow page; users can still enter one at runtime. With several environments, it is the default environment's Airflow; the others are set under Home → Environments. |
 | `AIRFLOW_USERNAME` / `AIRFLOW_PASSWORD` | — | Service account for the Airflow REST API (with `AIRFLOW_URL`): DAG list, recent runs, trigger, pause. Without them the Airflow page only probes `/health` and embeds the UI. |
 | `AIRFLOW_DAGS_DIR` | — | Airflow's `dags/` folder mounted into the backend: the DAG Studio edits it directly, instead of a repository or folder chosen in the studio (section 5b). |
