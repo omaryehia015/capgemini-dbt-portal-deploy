@@ -6,7 +6,9 @@
 #   ./manage.sh logs [service]         follow logs (all services without one)
 #   ./manage.sh doctor                 check this machine and the stack
 #   ./manage.sh upgrade [release]      move to a release from releases.yml (default: latest)
-#   ./manage.sh backup                 dump the portal databases to backups/
+#   ./manage.sh backup                 write a backup now (the portal also makes one every day)
+#   ./manage.sh backups                the backups in the backup folder, newest first
+#   ./manage.sh restore [file] [--yes] replace this portal's data with a backup (default: the newest)
 #   ./manage.sh reset-password [user]  a new password for an account (default: admin), shown once
 #   ./manage.sh services               the service names, and what each does
 #   ./manage.sh help
@@ -22,6 +24,16 @@ PORT="$(get_env PORTAL_PORT)"; PORT="${PORT:-8080}"
 cmd="${1:-help}"; shift || true
 
 need_runtime() { find_runtime || fail "Docker or Podman with compose is not running. $(install_hint)"; }
+
+# app.backup in a one-off backend container: it works while the backend is stopped.
+backup_cli() { "${C[@]}" run --rm --no-deps -T --entrypoint python backend -m app.backup "$@"; }
+wait_postgres() {
+    for _ in $(seq 1 30); do
+        "${C[@]}" exec -T postgres pg_isready -U portal -d portal >/dev/null 2>&1 && return 0
+        sleep 2
+    done
+    return 1
+}
 
 modules() {
     local m mode url
@@ -79,11 +91,40 @@ case "$cmd" in
         ;;
     backup)
         need_runtime
-        mkdir -p backups
-        file="backups/portal-$(date +%Y%m%d-%H%M%S).sql.gz"
-        say "Dumping the portal databases to $file"
-        "${C[@]}" exec -T postgres pg_dumpall -U portal | gzip > "$file"
-        ok "$(du -h "$file" | cut -f1) written. Restore: gunzip -c $file | ${C[*]} exec -T postgres psql -U portal -d postgres"
+        say "Writing a backup"
+        backup_cli now
+        ;;
+    backups)
+        need_runtime
+        backup_cli list
+        ;;
+    restore)
+        need_runtime
+        file="latest"; yes=""
+        for arg in "$@"; do if [[ "$arg" == --yes ]]; then yes=1; else file="$arg"; fi; done
+        "${C[@]}" up -d postgres >/dev/null
+        wait_postgres || fail "The database does not start: ./manage.sh logs postgres"
+        say "Backups in $(get_env PORTAL_BACKUP_DIR)"
+        backup_cli list
+        echo
+        warn "Restoring replaces every account, run, schedule and setting of this portal with the backup's ($file)."
+        if [[ -z "$yes" ]]; then
+            [[ -t 0 ]] || fail "Add --yes to restore without being asked."
+            read -rp "Type yes to go on: " answer
+            [[ "$answer" == yes ]] || fail "Nothing restored."
+        fi
+        say "Stopping the portal"
+        "${C[@]}" stop frontend cube worker backend
+        say "Restoring"
+        if ! backup_cli restore "$file"; then
+            "${C[@]}" start >/dev/null 2>&1 || true
+            fail "The restore failed (see above). The portal is starting again; restore another backup if its data is incomplete."
+        fi
+        say "Starting the portal"
+        # start, not up: it keeps the number of workers.
+        "${C[@]}" start
+        wait_healthy "$PORT" || fail "Not up after 5 minutes. See: ./manage.sh logs backend"
+        ok "Restored. Sign in with the accounts of the backup: http://localhost:$PORT"
         ;;
     services)
         cat <<'EOF'
@@ -102,6 +143,6 @@ EOF
         say "A new password for ${1:-admin}"
         "${C[@]}" exec -T backend python -m app.reset_password "${1:-admin}"
         ;;
-    help|-h|--help) sed -n '2,13p' "$0" ;;
+    help|-h|--help) sed -n '2,15p' "$0" ;;
     *) fail "Unknown command '$cmd'. Run ./manage.sh help" ;;
 esac

@@ -137,6 +137,20 @@ if ($chosen -ne $Port) {
 }
 foreach ($key in $extraEnv.Keys) { Set-Env $key $extraEnv[$key] }
 if ($extraEnv.Count) { Say "Applied $($extraEnv.Count) setting(s) from $Answers" }
+# Backups: a folder on this computer outside Docker, which deleting the containers
+# or volumes (or resetting Docker Desktop / Podman) leaves alone. An install keeps
+# the one it has.
+if (-not (Get-Env PORTAL_BACKUP_DIR)) {
+    $folder = Join-Path $Root "backups"
+    $mount = Get-MountPath $folder
+    # A bare name would be a volume: a folder relative to compose.yaml starts with ./
+    if ($mount -notmatch '^(\.|/|[A-Za-z]:)') { $mount = "./$mount" }
+    Set-Env PORTAL_BACKUP_DIR $mount
+    Set-Env PORTAL_BACKUPS_HOST ($folder -replace '\\', '/')
+}
+$BackupDir = Get-Env PORTAL_BACKUP_DIR
+$BackupFolder = if ([IO.Path]::IsPathRooted($BackupDir)) { $BackupDir } else { Join-Path $Root $BackupDir }
+New-Item -ItemType Directory -Force $BackupFolder | Out-Null
 # Bind mounts on Windows show every file as root-owned: run as root so `dbt deps` can write.
 if (-not $GitMode -or $ProjectsRoot -or $sharedBefore) { Set-Env PORTAL_USER "0:0" }
 
@@ -284,7 +298,12 @@ if (-not (Wait-Healthy $Port)) { Fail "Not up after 5 minutes. See: .\manage.ps1
 Say "Portal is up: http://localhost:$Port"
 $ErrorActionPreference = "Continue"
 $creds = (& $E compose logs backend 2>&1 | Out-String) -split "\r?\n" | Where-Object { $_.Trim() } | Select-String -Pattern "GENERATED INITIAL CREDENTIALS" -Context 0, 5
-if ($creds) { $creds | ForEach-Object { $_.Line; $_.Context.PostContext } } else { "No new passwords printed: the accounts already exist from an earlier run." }
+if ($creds) {
+    $creds | ForEach-Object { $_.Line; $_.Context.PostContext }
+    # A new portal next to the backups of an earlier one: its data may be what was lost.
+    $earlier = @(Get-ChildItem $BackupFolder -Filter "portal-backup-*.tar.gz" -ErrorAction SilentlyContinue).Count
+    if ($earlier) { Warn "This is a new portal, and $BackupFolder holds $earlier backup(s) of an earlier one. To bring that data back: .\manage.ps1 restore" }
+} else { "No new passwords printed: the accounts already exist from an earlier run." }
 $url = "http://localhost:$Port/setup"
 $next = if ($ProjectsRoot) { "Step 2 of the Setup Assistant: pick your project from the folder you shared (or use Git)." } elseif ($GitMode) { "Step 2 of the Setup Assistant connects your dbt project (Git)." } else { "Setup Assistant: workspace, warehouse, dbt project, team." }
 Write-Host ""
@@ -300,6 +319,7 @@ Day to day (from $Root):
   .\manage.ps1 status            # what is running, and whether it is healthy
   .\manage.ps1 logs backend      # follow a service's log
   .\manage.ps1 doctor            # check this machine and the stack
+  .\manage.ps1 backups           # the backups (in $BackupFolder); also: backup, restore
   .\manage.ps1 help              # everything else
 "@
 if (-not $NoBrowser -and -not $NonInteractive) { Start-Process $url }

@@ -106,6 +106,7 @@ flowchart LR
     WS[/"workspace volume<br/>the client's dbt project"/]
     DATA[/"portal_data volume<br/>secret.key, Cube state, trash"/]
   end
+  BK[/"backups folder on the host<br/>a daily archive of PostgreSQL + /data"/]
 
   FE -->|"/api/*, WebSocket"| BE
   BE <-->|"jobs + logs"| RD
@@ -116,6 +117,7 @@ flowchart LR
   WK --- WS
   BE --- DATA
   WK --- DATA
+  BE -->|"daily backup"| BK
   BE -->|"queries"| CU
   CU -->|"/internal/cube"| BE
   WK -->|"dbt"| DWH[("Client warehouse")]
@@ -123,7 +125,9 @@ flowchart LR
   CU -->|"semantic queries"| DWH
 ```
 
-Only the frontend port is published. The single-node variant
+Only the frontend port is published. The backups folder is a plain folder on
+the host, outside the volumes, so deleting the containers or the volumes leaves
+it (deploy docs/ONBOARDING.md, section 9, *Backups*). The single-node variant
 (`compose.single.yaml`) drops Redis, PostgreSQL and the worker: the backend
 runs dbt itself on SQLite. Details per container:
 [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -209,6 +213,7 @@ so re-running anything is safe. Full operator guide:
 | Cube login and generated model | `/data/cube` | backend semantic service |
 | Encryption key for stored secrets | `/data/secret.key` or `PORTAL_SECRET_KEY` | backend |
 | Live logs, job queue | Redis (nothing survives a restart, nothing needs to) | backend + workers |
+| Backups of all of the above that the portal holds (not the warehouse) | `portal-backup-*.tar.gz` in the backups folder (`BACKUP_DIR`), daily, newest 14 kept | backend (`app/services/backups.py`) |
 
 ```mermaid
 flowchart LR

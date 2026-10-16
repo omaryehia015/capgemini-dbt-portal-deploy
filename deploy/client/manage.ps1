@@ -5,7 +5,9 @@
 #   .\manage.ps1 logs [service]         follow logs (all services without one)
 #   .\manage.ps1 doctor                 check this machine and the stack
 #   .\manage.ps1 upgrade [release]      move to a release from releases.yml (default: latest)
-#   .\manage.ps1 backup                 dump the portal databases to backups\
+#   .\manage.ps1 backup                 write a backup now (the portal also makes one every day)
+#   .\manage.ps1 backups                the backups in the backup folder, newest first
+#   .\manage.ps1 restore [file] [--yes] replace this portal's data with a backup (default: the newest)
 #   .\manage.ps1 reset-password [user]  a new password for an account (default: admin), shown once
 #   .\manage.ps1 services               the service names, and what each does
 #   .\manage.ps1 help
@@ -22,6 +24,21 @@ if (-not (Test-Path .env)) { Fail "No .env in ${Root}: install first with .\setu
 $Port = if (Get-Env PORTAL_PORT) { [int](Get-Env PORTAL_PORT) } else { 8080 }
 
 function Need-Runtime { if (-not (Find-Runtime)) { Fail "Docker or Podman with compose is not running. $(Install-Hint)" } }
+# app.backup in a one-off backend container: it works while the backend is stopped.
+function Backup-Cli {
+    $ErrorActionPreference = "Continue"
+    & $script:E compose run --rm --no-deps -T --entrypoint python backend -m app.backup @args | Write-Host
+    return ($LASTEXITCODE -eq 0)
+}
+function Wait-Postgres {
+    $ErrorActionPreference = "Continue"
+    for ($i = 0; $i -lt 30; $i++) {
+        & $script:E compose exec -T postgres pg_isready -U portal -d portal *> $null
+        if ($LASTEXITCODE -eq 0) { return $true }
+        Start-Sleep 2
+    }
+    return $false
+}
 function Test-Portal {
     try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "http://localhost:$Port/api/health" | Out-Null; return $true } catch { return $false }
 }
@@ -79,13 +96,40 @@ switch ($Command) {
     }
     "backup" {
         Need-Runtime
-        New-Item -ItemType Directory -Force backups | Out-Null
-        $file = "backups\portal-$(Get-Date -Format yyyyMMdd-HHmmss).sql"
-        Say "Dumping the portal databases to $file"
-        $ErrorActionPreference = "Continue"
-        & $script:E compose exec -T postgres pg_dumpall -U portal | Out-File -Encoding utf8 $file
-        if ($LASTEXITCODE -ne 0) { Fail "pg_dumpall failed." }
-        Ok "$([math]::Round((Get-Item $file).Length / 1MB, 1)) MB written. Restore: Get-Content $file | $script:E compose exec -T postgres psql -U portal -d postgres"
+        Say "Writing a backup"
+        if (-not (Backup-Cli now)) { Fail "The backup failed (see above)." }
+    }
+    "backups" {
+        Need-Runtime
+        Backup-Cli list | Out-Null
+    }
+    "restore" {
+        Need-Runtime
+        $yes = $Rest -contains "--yes"
+        $file = @($Rest | Where-Object { $_ -ne "--yes" })
+        $file = if ($file.Count) { $file[0] } else { "latest" }
+        Compose up -d postgres
+        if (-not (Wait-Postgres)) { Fail "The database does not start: .\manage.ps1 logs postgres" }
+        Say "Backups in $(Get-Env PORTAL_BACKUP_DIR)"
+        Backup-Cli list | Out-Null
+        ""
+        Warn "Restoring replaces every account, run, schedule and setting of this portal with the backup's ($file)."
+        if (-not $yes) {
+            if ((Read-Host "Type yes to go on") -ne "yes") { Fail "Nothing restored." }
+        }
+        Say "Stopping the portal"
+        Compose stop frontend cube worker backend
+        Say "Restoring"
+        if (-not (Backup-Cli restore $file)) {
+            $ErrorActionPreference = "Continue"
+            & $script:E compose start *> $null
+            Fail "The restore failed (see above). The portal is starting again; restore another backup if its data is incomplete."
+        }
+        Say "Starting the portal"
+        # start, not up: it keeps the number of workers.
+        Compose start
+        if (-not (Wait-Healthy $Port)) { Fail "Not up after 5 minutes. See: .\manage.ps1 logs backend" }
+        Ok "Restored. Sign in with the accounts of the backup: http://localhost:$Port"
     }
     "services" {
         @"
@@ -107,6 +151,6 @@ switch ($Command) {
         & $script:E compose exec -T backend python -m app.reset_password $user
         if ($LASTEXITCODE -ne 0) { Fail "Could not reset the password (see above)." }
     }
-    { $_ -in "help", "-h", "--help" } { Get-Content $PSCommandPath -TotalCount 11 | ForEach-Object { $_ -replace '^# ?', '' } }
+    { $_ -in "help", "-h", "--help" } { Get-Content $PSCommandPath -TotalCount 13 | ForEach-Object { $_ -replace '^# ?', '' } }
     default { Fail "Unknown command '$Command'. Run .\manage.ps1 help" }
 }

@@ -56,13 +56,17 @@ services:
   # One-off, before the backend starts: moves the data of a portal from before
   # 2026.11 (separate identity/execution databases, a semantic_data volume)
   # into the one database and volume. Does nothing on a new or upgraded install.
+  #
+  # Also hands the backup folder to the backend's user: a new volume, or a host
+  # folder Docker created, belongs to root. Done here rather than in upgrade.sh,
+  # which an upgrade from an older kit does not replace.
   upgrade:
     image: ${POSTGRES_IMAGE:-docker.io/library/postgres:17-alpine}
     restart: "no"
-    entrypoint: ["sh", "/upgrade.sh"]
+    entrypoint: ["sh", "-c", "chown \"$$PORTAL_USER\" /backups 2>/dev/null || true; exec sh /upgrade.sh"]
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      # Owner of /data: the user the backend runs as.
+      # Owner of /data and /backups: the user the backend runs as.
       PORTAL_USER: ${PORTAL_USER:-10001:10001}
     depends_on:
       postgres: { condition: service_healthy }
@@ -71,6 +75,7 @@ services:
       - portal_data:/data
       - execution_data:/old-execution-data:ro
       - semantic_data:/old-semantic-data:ro
+      - ${PORTAL_BACKUP_DIR:-backups}:/backups
 
   redis:
     image: ${REDIS_IMAGE:-docker.io/library/redis:7-alpine}
@@ -94,6 +99,9 @@ services:
       EXECUTION_ROLE: api
       CUBE_API_SECRET: "${CUBE_API_SECRET:?CUBE_API_SECRET is not set}"
       CUBE_API_URL: http://cube:4000
+      # Backups (Users & Access > Backups): BACKUP_KEEP and BACKUP_INTERVAL_HOURS in .env.
+      BACKUP_DIR: /backups
+      PORTAL_BACKUPS_HOST: ${PORTAL_BACKUPS_HOST:-}
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -107,6 +115,12 @@ services:
       - ${DBT_PROJECTS_ROOT:-projects}:/projects
       # The dbt editor's trash, the semantic layer's warehouse login and model.
       - portal_data:/data
+      # The portal's backups. setup.sh / setup.ps1 set PORTAL_BACKUP_DIR to a host
+      # folder, so deleting the containers or their volumes (down -v, a Docker
+      # Desktop / Podman reset) leaves them in place; a second disk or a share is
+      # better still. Unset: a volume of its own (Podman does not create a
+      # missing host folder, so there is no folder default).
+      - ${PORTAL_BACKUP_DIR:-backups}:/backups
     expose: ["8000"]
     # Declared here rather than only in the Dockerfile: Podman builds OCI images
     # by default, and OCI images drop HEALTHCHECK.
@@ -184,6 +198,8 @@ services:
 volumes:
   postgres_data:
   portal_data:
+  # The backups, when PORTAL_BACKUP_DIR names no host folder.
+  backups:
   # Read once by `upgrade`: the execution and semantic services' files before 2026.11.
   execution_data:
   semantic_data:

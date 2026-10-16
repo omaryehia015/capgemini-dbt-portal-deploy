@@ -174,6 +174,10 @@ if ($inMachine) {
     }
     $tokenFile = Join-Path $env:PI_WORK "token"
     [IO.File]::WriteAllText($tokenFile, [string]$env:PORTAL_TOKEN)
+    # The backups go to a Windows folder, so deleting or resetting the Podman
+    # machine leaves them alone (only on a first install; one keeps its folder).
+    $backups = Join-Path $dir "backups"
+    New-Item -ItemType Directory $backups -Force | Out-Null
     $rootArg = ""; $display = ""
     if ($shareRoot) {
         $rootArg = "--projects-root '" + (To-Machine $shareRoot) + "'"
@@ -182,6 +186,7 @@ if ($inMachine) {
     $bash = [IO.File]::ReadAllText((Join-Path $env:PI_WORK "setup-in-machine.template"))
     $bash = $bash.Replace("__OLDENV__", $oldEnv).Replace("__KIT__", (To-Machine $kit)).Replace("__TOKEN__", (To-Machine $tokenFile))
     $bash = $bash.Replace("__DISPLAY__", $display).Replace("__PORT__", "$port").Replace("__ROOTARG__", $rootArg)
+    $bash = $bash.Replace("__BACKUPS__", (To-Machine $backups)).Replace("__BACKUPSDISPLAY__", ([IO.Path]::GetFullPath($backups) -replace '\\', '/'))
     $bashFile = Join-Path $env:PI_WORK "setup-in-machine.sh"
     [IO.File]::WriteAllText($bashFile, ($bash -replace "`r`n", "`n"), (New-Object Text.ASCIIEncoding))
     & podman machine ssh ("bash '" + (To-Machine $bashFile) + "'") 2>&1 | ForEach-Object { Clean $_ }
@@ -233,6 +238,7 @@ cd "$HOME/dbt-portal"
 chmod +x ./*.sh
 PORTAL_TOKEN="$(cat "__TOKEN__")"; export PORTAL_TOKEN
 export PORTAL_PROJECTS_DISPLAY="__DISPLAY__"
+export PORTAL_BACKUP_DIR_DEFAULT="__BACKUPS__" PORTAL_BACKUPS_DISPLAY="__BACKUPSDISPLAY__"
 port=(--port __PORT__)
 # --release latest: every run installs, or upgrades to, the kit's newest release.
 ./setup.sh --non-interactive --no-browser --release latest "${port[@]}" __ROOTARG__

@@ -141,6 +141,16 @@ if [[ "$chosen" != "$PORT" ]]; then
 fi
 for pair in "${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}"; do set_env "${pair%%=*}" "${pair#*=}"; done
 [[ ${#EXTRA_ENV[@]} -gt 0 ]] && say "Applied ${#EXTRA_ENV[@]} setting(s) from $ANSWERS"
+# Backups: a folder on this machine outside Docker, which deleting the containers
+# or volumes leaves alone. An install keeps the one it has. Inside the Podman
+# machine on Windows the setup window passes a Windows folder
+# (PORTAL_BACKUP_DIR_DEFAULT), so a reset of the machine leaves it alone too.
+if [[ -z "$(get_env PORTAL_BACKUP_DIR)" ]]; then
+    set_env PORTAL_BACKUP_DIR "${PORTAL_BACKUP_DIR_DEFAULT:-$ROOT/backups}"
+    set_env PORTAL_BACKUPS_HOST "${PORTAL_BACKUPS_DISPLAY:-${PORTAL_BACKUP_DIR_DEFAULT:-$ROOT/backups}}"
+fi
+BACKUP_DIR="$(get_env PORTAL_BACKUP_DIR)"
+mkdir -p "$BACKUP_DIR" 2>/dev/null || warn "Could not create the backup folder $BACKUP_DIR."
 
 # The kit's files are only as new as the kit: fetch the current ones, so
 # `--release latest` and `manage.sh upgrade` reach releases made since it was
@@ -288,8 +298,13 @@ wait_healthy "$PORT" || fail "Not up after 5 minutes. See: ./manage.sh status; .
 
 # -- 5. First sign-in ----------------------------------------------------------
 say "Portal is up: http://localhost:$PORT"
-"${C[@]}" logs backend 2>&1 | grep -A5 "GENERATED INITIAL CREDENTIALS" \
-    || echo "No new passwords printed: the accounts already exist from an earlier run."
+if "${C[@]}" logs backend 2>&1 | grep -A5 "GENERATED INITIAL CREDENTIALS"; then
+    # A new portal next to the backups of an earlier one: its data may be what was lost.
+    earlier="$(find "$BACKUP_DIR" -maxdepth 1 -name 'portal-backup-*.tar.gz' 2>/dev/null | wc -l | tr -d ' ')"
+    [[ "$earlier" == 0 ]] || warn "This is a new portal, and $BACKUP_DIR holds $earlier backup(s) of an earlier one. To bring that data back: ./manage.sh restore"
+else
+    echo "No new passwords printed: the accounts already exist from an earlier run."
+fi
 url="http://localhost:$PORT/setup"
 if [[ -n "$PROJECTS_ROOT" ]]; then next="Step 2 of the Setup Assistant: pick your project from the folder you shared (or use Git)."
 elif [[ -n "$GIT_MODE" ]]; then next="Step 2 of the Setup Assistant connects your dbt project (Git)."
@@ -304,6 +319,7 @@ Day to day (from $ROOT):
   ./manage.sh status            # what is running, and whether it is healthy
   ./manage.sh logs backend      # follow a service's log
   ./manage.sh doctor            # check this machine and the stack
+  ./manage.sh backups           # the backups (in $BACKUP_DIR); also: backup, restore
   ./manage.sh help              # everything else
 EOF
 if [[ -z "$NO_BROWSER" && -z "$NON_INTERACTIVE" ]]; then

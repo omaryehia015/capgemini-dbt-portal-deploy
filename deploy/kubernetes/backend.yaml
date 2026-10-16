@@ -31,9 +31,11 @@ spec:
             - secretRef: { name: dbt-portal-secrets }
           env:
             - { name: EXECUTION_ROLE, value: api }
+            - { name: BACKUP_DIR, value: /backups }
           volumeMounts:
             - { name: workspace, mountPath: /workspace }
             - { name: data, mountPath: /data }
+            - { name: backups, mountPath: /backups }
           # Git clone + dbt deps happen before uvicorn listens.
           startupProbe:
             httpGet: { path: /api/health, port: 8000 }
@@ -54,6 +56,11 @@ spec:
         # The dbt editor's trash, the stored-credentials key, Cube's state.
         - name: data
           persistentVolumeClaim: { claimName: dbt-portal-data }
+        # The portal's own backups (a daily archive of the database and /data):
+        # a volume apart from the data, best on another storage class or one
+        # the cluster's own backup copies elsewhere.
+        - name: backups
+          persistentVolumeClaim: { claimName: dbt-portal-backups }
 ---
 apiVersion: v1
 kind: Service
@@ -73,3 +80,14 @@ spec:
   resources:
     requests:
       storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dbt-portal-backups
+spec:
+  accessModes: [ReadWriteOnce]
+  # storageClassName: <a class backed by other disks than the data volume>
+  resources:
+    requests:
+      storage: 5Gi

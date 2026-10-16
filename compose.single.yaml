@@ -6,6 +6,18 @@
 #
 # Same images as compose.yaml.
 services:
+  # One-off: hands the backup folder (PORTAL_BACKUP_DIR, a host folder; unset: a
+  # volume of its own) to the backend's user.
+  backup-folder:
+    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-backend:${BACKEND_TAG:-latest}
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown \"$$PORTAL_USER\" /backups 2>/dev/null || true"]
+    environment:
+      PORTAL_USER: ${PORTAL_USER:-10001:10001}
+    volumes:
+      - ${PORTAL_BACKUP_DIR:-backups}:/backups
+
   backend:
     image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-backend:${BACKEND_TAG:-latest}
     restart: unless-stopped
@@ -20,10 +32,17 @@ services:
       JWT_SECRET: ${JWT_SECRET:-}
       CUBE_API_SECRET: "${CUBE_API_SECRET:?CUBE_API_SECRET is not set - see .env.example}"
       CUBE_API_URL: http://cube:4000
+      # Backups (the Users & Access page). Set PORTAL_BACKUP_DIR to a host folder
+      # (e.g. ./backups, created first): deleting the containers or volumes leaves it.
+      BACKUP_DIR: /backups
+      PORTAL_BACKUPS_HOST: ${PORTAL_BACKUPS_HOST:-}
+    depends_on:
+      backup-folder: { condition: service_completed_successfully }
     volumes:
       - ${DBT_PROJECT_PATH:-workspace}:/workspace
       # SQLite database, the dbt editor's trash, the semantic layer's state.
       - portal_data:/data
+      - ${PORTAL_BACKUP_DIR:-backups}:/backups
     expose: ["8000"]
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/api/health"]
@@ -65,3 +84,4 @@ services:
 volumes:
   portal_data:
   workspace:
+  backups:

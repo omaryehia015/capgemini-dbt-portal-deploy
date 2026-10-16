@@ -167,12 +167,50 @@ From the folder with `compose.yaml` (on Windows: `.\manage.ps1 <command>`):
 ./manage.sh stop | start        # stop everything, start again
 ./manage.sh doctor              # check this machine, the containers and the project
 ./manage.sh upgrade 2026.11.0   # move to a release from releases.yml (default: latest)
-./manage.sh backup              # dump the portal databases to backups/
+./manage.sh backup              # write a backup now (the portal also makes one every day)
+./manage.sh backups             # the backups, newest first
+./manage.sh restore             # bring back the newest backup (or: restore <file name>)
 ./manage.sh reset-password      # a new admin password (or: reset-password <user>), shown once
 ./manage.sh services            # what each service does
 ```
 
 More dbt jobs at once: `./setup.sh <project> --workers 3`.
+
+### Backups
+
+Your data (accounts, run history, schedules, settings, the saved warehouse
+logins, the engineers' work) is safe when a container stops, crashes, is
+deleted or is upgraded: it lives in volumes, not in the containers. To also
+survive the volumes being deleted (`docker compose down -v`, resetting Docker
+Desktop or the Podman machine) or a broken database, **the portal backs itself
+up every day** into a normal folder on this computer:
+
+| Installed with | Backups folder |
+|---|---|
+| setup.sh / setup.ps1 | `backups/` next to `compose.yaml` |
+| the Windows setup window, with Podman | `%USERPROFILE%\dbt-portal\backups` (on the Windows side) |
+
+It keeps the 14 newest. Admins see them under **Users & Access → Backups**,
+with *Back up now* and a **Download** button for each.
+
+**The backups folder is on the same disk as the portal.** If that disk or this
+computer is lost, the backups go with it. Download a backup now and then and
+keep it somewhere else (your laptop, OneDrive, SharePoint), or point
+`PORTAL_BACKUP_DIR` in `.env` at a second disk or a network share and run the
+setup again. A backup contains every login the portal stores: keep it as safe
+as a password.
+
+**To restore**, from the folder with `compose.yaml`:
+
+```bash
+./manage.sh restore                       # the newest backup
+./manage.sh restore portal-backup-...gz   # a given one (put a downloaded file in the backups folder first)
+```
+
+Windows: `.\manage.ps1 restore`. Podman machine: `podman machine ssh "cd ~/dbt-portal && ./manage.sh restore"`.
+It asks before replacing anything, stops the portal, restores and starts it
+again. After a reinstall the setup says when it finds an earlier install's
+backups, so you can bring that data back.
 
 ### Troubleshooting
 
@@ -185,7 +223,8 @@ More dbt jobs at once: `./setup.sh <project> --workers 3`.
 | A module's Test connection fails | The failing line says why; its setup guide on the module page lists the usual fixes. |
 
 **Uninstall:** `docker compose down -v` (deletes the accounts and history).
-Your dbt project is never deleted.
+Your dbt project is never deleted, and neither is the backups folder: delete
+it yourself if you no longer need it.
 
 ## Just one laptop?
 

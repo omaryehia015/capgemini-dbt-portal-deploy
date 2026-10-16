@@ -320,7 +320,9 @@ sudo cp <this repo>/.env.example /etc/dbt-portal/portal.env    # KEY=VALUE, no q
 echo "DBT_PROJECT_DIR=/opt/dbt-portal-project" | sudo tee -a /etc/dbt-portal/portal.env
 echo "DATABASE_URL=sqlite:////data/portal.db"   | sudo tee -a /etc/dbt-portal/portal.env
 echo "PORTAL_DATA_DIR=/data"                    | sudo tee -a /etc/dbt-portal/portal.env
-sudo chown -R dbtportal /opt/dbt-portal-backend /opt/dbt-portal-project /data
+echo "BACKUP_DIR=/var/backups/dbt-portal"       | sudo tee -a /etc/dbt-portal/portal.env   # best on another disk
+sudo mkdir -p /var/backups/dbt-portal
+sudo chown -R dbtportal /opt/dbt-portal-backend /opt/dbt-portal-project /data /var/backups/dbt-portal
 
 .venv/bin/python -m app.preflight   # check before wiring up systemd
 sudo cp <this repo>/deploy/vm/dbt-portal-backend.service /etc/systemd/system/
@@ -721,6 +723,10 @@ here by what they control; the backend's `app/core/config.py`,
 | `PORTAL_SEMANTIC_URL` | `http://semantic:8000` | Cube container: where it reads its configuration (`http://backend:8000` in both compose files). |
 | `BACKEND_UPSTREAM` | `backend:8000` | Frontend container: where the gateway sends `/api` (section 3). |
 | `PORTAL_DATA_DIR` | `/data` in the images | Files the backend keeps outside its database: the semantic layer's state, the dbt editor's trash, the stored-credentials key, a single node's SQLite file. |
+| `BACKUP_DIR` | unset (compose and Kubernetes: `/backups`) | Where the backend writes its backups (section 9, *Backups*). Unset: no backups. |
+| `PORTAL_BACKUP_DIR` | a volume `backups` (setup.sh / setup.ps1: the folder `backups/` next to `compose.yaml`) | Compose: the host folder mounted at `/backups`; it must exist (Podman does not create it). A volume is deleted by `down -v`, a host folder is not; a second disk or a network share is better still. |
+| `PORTAL_BACKUPS_HOST` | — | That folder as people find it on the host, shown on the Backups tab. setup.sh / setup.ps1 / the setup window fill it in. |
+| `BACKUP_INTERVAL_HOURS` / `BACKUP_KEEP` | `24` / `14` | An automatic backup every so many hours (`0`: only *Back up now*), keeping this install's newest so many. |
 | `BACKEND_TAG` / `FRONTEND_TAG` / `CUBE_TAG` / `IMAGE_REGISTRY` | `latest` / `ghcr.io/omaryehia015` | Compose: which images to run. Take them from one release in `releases.yml`. |
 
 **The dbt project and the warehouse:**
@@ -905,6 +911,61 @@ alive by the worker's heartbeat. If a worker stops, its jobs are marked failed
 with "Interrupted" (right away on a clean shutdown, within about 2.5 minutes
 after a crash). Live logs and *Cancel* go through Redis, so they keep
 working across backend restarts.
+
+**Backups.** The portal backs itself up. Deleting or rebuilding a container
+loses nothing (the data is in volumes), but `docker compose down -v`, a reset
+of Docker Desktop or the Podman machine, a broken disk or a corrupted database
+would. So once a day the backend writes one archive,
+`portal-backup-<UTC time>-<install>.tar.gz`, into `BACKUP_DIR`:
+
+| In the archive | What it is |
+|---|---|
+| `database/*.jsonl` | every row of the portal's tables: accounts, roles, audit trail, run history, schedules, alerts, settings (as rows, so it restores on SQLite or PostgreSQL) |
+| `data/` | `/data`: **`secret.key`**, which decrypts the stored warehouse, git and tool logins (without it they would have to be entered again), engineers' workspaces, DAG Studio clones, Cube state |
+| `workspace/` | the dbt project, only when it is the portal's own volume (a repository the Setup Assistant cloned); a folder of the client's is theirs and stays out |
+| `manifest.json` | when, which release, the schema revisions |
+
+`target/`, `dbt_packages/` and `logs/` are left out: dbt rebuilds them.
+Compose mounts a **host folder** at `/backups` (`PORTAL_BACKUP_DIR`, set up by
+setup.sh / setup.ps1 as `backups/` next to `compose.yaml`; the Windows setup
+window with Podman uses `%USERPROFILE%\dbt-portal\backups` on the Windows side),
+so nothing that deletes containers or volumes deletes the backups. portal.py
+uses `~/.capgemini-portal/backups/<portal>`; Kubernetes a volume of its own
+(`dbt-portal-backups`).
+
+Retention: this install's newest `BACKUP_KEEP` (14). Each install has an id, in
+the file name; **backups of another install are never deleted automatically**.
+After a wipe, the new portal waits one interval before its first automatic
+backup, so the newest file in the folder is still the old data, and both the
+setup script and the Backups tab say that an earlier install's backups are
+there.
+
+In the portal: **Users & Access → Backups** (`platform.manage`) shows the last
+and next backup, the folder, *Back up now*, and every backup to **download**
+(each download is audited). The folder is on the same disk as the portal: a
+lost disk takes the backups with it, so tell the client to download one now
+and then and keep it elsewhere. A backup holds every account and the key to
+the stored logins: treat the file like a password.
+
+Restore, with the portal stopped (the command stops it, restores and starts it):
+
+```bash
+./manage.sh backups                 # what is there, newest first
+./manage.sh restore                 # the newest backup
+./manage.sh restore <file name>     # a given one; --yes skips the question
+# Windows: .\manage.ps1 restore    Podman machine: podman machine ssh "cd ~/dbt-portal && ./manage.sh restore"
+```
+
+A downloaded backup goes into the backups folder first. Restoring a portal that
+has backups of its own backs it up first, so a wrong restore can be undone. The
+schema is rebuilt as the backup knew it and then upgraded, so a backup restores
+on the same release or a newer one; one made by a newer portal asks to upgrade
+first. Under the hood: `python -m app.backup now | list | restore <file>` in a
+one-off backend container. On Kubernetes, scale the workers to 0, run
+`kubectl exec deploy/dbt-portal-backend -- python -m app.backup restore latest`
+at a quiet moment, then `kubectl rollout restart deploy/dbt-portal-backend` and
+scale the workers back. `PORTAL_SECRET_KEY`, when you set one, is not in the
+backup: keep it with the deployment's other secrets.
 
 **Upgrades.** Pick a newer release in `releases.yml`, then
 `./setup.sh <project> --release <name>` (or set the three tags in `.env` and
