@@ -106,7 +106,6 @@ flowchart LR
     RD[("Redis<br/>job queue, live logs,<br/>cancel, cache events")]
     WS[/"workspace volume<br/>the client's dbt project"/]
     DATA[/"portal_data volume<br/>secret.key, Cube state, trash"/]
-    IDE["ide (optional)<br/>one VS Code per developer"]
   end
   BK[/"backups folder on the host<br/>a daily archive of PostgreSQL + /data"/]
 
@@ -125,14 +124,9 @@ flowchart LR
   WK -->|"dbt"| DWH[("Client warehouse")]
   BE -->|"page reads"| DWH
   CU -->|"semantic queries"| DWH
-  FE -.->|"/ide/"| IDE
-  BE -.->|"sessions"| IDE
-  IDE -.->|"dbt as the developer"| DWH
 ```
 
-Only the frontend port is published. The ide service (compose profile `ide`)
-gives each developer their own VS Code under `/ide/` (ONBOARDING section 5c).
-The backups folder is a plain folder on
+Only the frontend port is published. The backups folder is a plain folder on
 the host, outside the volumes, so deleting the containers or the volumes leaves
 it (deploy docs/ONBOARDING.md, section 9, *Backups*). The single-node variant
 (`compose.single.yaml`) drops Redis, PostgreSQL and the worker: the backend
@@ -264,12 +258,11 @@ flowchart LR
 | 1 | Public API | backend `openapi.json`, `API_VERSION` | frontend `schema.gen.ts`, `version.ts` | backend CI (stale schema), frontend `tsc`, version banner |
 | 2 | Cube config API | backend `CONTRACT_VERSION` | cube `CONTRACT` | cube log error at start, `releases.yml` |
 | 3 | FinOps columns | core `models/finops/` | backend FinOps service, frontend FinOps page | `pytest/test_finops_models.py` (core), `tests/test_finops_contract.py` (backend) |
-| 4 | Gateway routes | backend `app/core/services.py` | frontend `nginx/default.conf.template` (and `nginx/40-vscode.sh` for `/ide/`) | review |
+| 4 | Gateway routes | backend `app/core/services.py` | frontend `nginx/default.conf.template` | review |
 | 5 | Client install | backend auth/onboarding/jobs, env vars, log banner | core `scripts/portal.py` | `pytest/test_portal_script.py` |
 | 6 | Package schemas | core `metadata_package_schemas` | backend onboarding | shared var, read at run time |
 | 7 | Versions | core `versions.yml` | backend `requirements.txt` | review |
 | 8 | Releases | each repo's tags | deploy `releases.yml` | e2e smoke test |
-| 9 | VS Code (ide service) | backend `ide/` image (same tag as the backend), `IDE_URL` / `IDE_SECRET`, the `/ide/` cookie ticket | deploy `compose.yaml` profile `ide`, `deploy/kubernetes/ide.yaml`; frontend `IDE_UPSTREAM` | `tests/test_ide_hub.py` (ticket format, routing), review |
 
 When a change spans repos, merge **producer first**: core → backend → cube
 → frontend → deploy.

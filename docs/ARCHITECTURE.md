@@ -15,8 +15,6 @@ flowchart LR
   A -- "queries" --> C
   A & W --> P[(PostgreSQL<br/>portal)]
   W & A --- WS[/"dbt project<br/>(workspace volume)"/]
-  G -. "/ide/ (optional)" .-> I["ide<br/>each developer's VS Code"]
-  A -. "sessions, IDE_SECRET" .-> I
 ```
 
 ## Containers
@@ -28,7 +26,6 @@ flowchart LR
 | **cube** | `-cube` | nothing | its configuration, from the backend | any number |
 | **frontend** | `-frontend` | nothing | — | any number |
 | **postgres**, **redis** | public images | the database; the job queue and live logs | — | one (or the platform's managed services) |
-| **ide** (optional, profile `ide`) | `-ide` (built from the backend repo, the backend's tag) | each developer's VS Code: a Linux user, home and code-server per developer (`ide_homes` volume) | the team's repositories (cloned once per developer), the developer's own dev login and GitHub token | one (sessions live in it) |
 
 **One image.** The backend and the workers are the same image
 (`capgemini-dbt-portal-backend`); the command and `EXECUTION_ROLE` decide
@@ -72,17 +69,6 @@ changes it fetches the new one, and Cube recompiles. Both directions use
 its configuration requests with it. The format of that API is versioned
 (`cube_contract`): the cube image says which version it speaks, and logs an
 error at start when the backend speaks another.
-
-**VS Code: the ide service (optional).** When a developer opens VS Code, the
-backend asks the ide service (`IDE_URL`, signed with `IDE_SECRET`) to start
-their own code-server, as a Linux user of their own, with their dev login and
-GitHub token, and sets a cookie scoped to `/ide/`. The gateway sends `/ide/`
-(HTTP and WebSockets, `IDE_UPSTREAM`) to the ide service, which routes each
-request to that developer's VS Code only. The ide container is on a network of
-its own with the frontend and the backend, so it cannot reach PostgreSQL or
-Redis, and it gets no secret but `IDE_SECRET`. Portal AI inside VS Code calls
-the portal's AI routes through the gateway with a token valid for those routes
-only. Details: the backend repo's `ide/README.md`.
 
 ## Data
 

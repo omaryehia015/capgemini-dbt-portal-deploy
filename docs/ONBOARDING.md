@@ -698,59 +698,6 @@ review, accept into the editor, or reject. It never saves or pushes. It uses
 the AI provider from the Setup Assistant; without one it answers from the
 studio's checks.
 
-## 5c. VS Code for the developers (optional)
-
-Each developer can open their own **VS Code** in the browser from dbt
-Development or the DAG Studio ("Portal editor | VS Code" at the top of the
-page): the real editor ([code-server](https://github.com/coder/code-server)),
-with terminals that have dbt (the workers' adapters and versions), git and the
-GitHub CLI; Source Control; GitHub pull requests and Actions; dbt Power User,
-Python, SQLFluff and YAML; and **Portal AI**, the portal's own Copilot (chat,
-ghost text, new models, documentation, tests, new DAGs, the DAG Studio's
-checks), on the AI provider of the Setup Assistant.
-
-| What the developer gets | Where it comes from |
-|---|---|
-| A home of their own, kept between sessions | the `ide_homes` volume, one Linux user per developer |
-| The team's repositories, cloned the first time | the dbt project's and the DAG Studio's Git sources (HTTPS); the portal's token is used for the clone only |
-| dbt that connects as them | their **My dev login** in that Development environment, as environment variables and a `profiles.yml` of `env_var()`s. Without one they get the connection without its secrets |
-| Pushes and pull requests in their name | their own GitHub token (VS Code's *Connect GitHub*), also used by the portal's pull-request dialog |
-
-**Turn it on** (compose): `./setup.sh --vscode` (Windows `.\setup.ps1 -VsCode`, or
-`VSCODE=yes` in an answers file). That writes three lines to `.env`, and
-`IDE_SECRET` is generated with the other secrets:
-
-```bash
-COMPOSE_PROFILES=ide          # starts the ide service (docker compose reads it from .env)
-IDE_URL=http://ide:8090       # where the backend opens sessions
-IDE_UPSTREAM=ide:8090         # where the gateway sends /ide/
-```
-
-then `./manage.sh upgrade` (or `docker compose up -d`). With podman-compose
-as Podman's compose provider, add `--profile ide` to its commands. On
-Kubernetes, see the header of `deploy/kubernetes/ide.yaml`. From source:
-`.\run-local.ps1 -Ide`.
-
-**Plan for it.** About 1 GB of RAM per developer with VS Code open
-(`IDE_MEMORY` caps the container, 6 GB by default); `IDE_MAX_SESSIONS` (8)
-developers at once; a VS Code nobody is in stops after `IDE_IDLE_MINUTES` (60)
-and keeps its files. The image is about 2.5 GB. Serve the portal over **HTTPS**
-(or open it on localhost): VS Code's extension views (dbt Power User's lineage,
-pull-request pages) need a secure context. Extensions come from Open VSX;
-`EXTENSIONS_GALLERY` on the ide service points VS Code at your own marketplace.
-
-**What it cannot reach.** The ide container gets `IDE_SECRET` only, never the
-portal's `.env`; its network reaches the frontend and the backend, not
-PostgreSQL or Redis. It runs as root with six capabilities and
-`no-new-privileges`, only to start each developer's VS Code as their own user:
-developers cannot read each other's homes, sessions or tokens, and there is no
-`sudo`. Portal AI's token opens the portal's AI routes only. An extension a
-developer installs runs with their portal sign-in in that browser, as a local
-extension runs as them.
-
-The portal page's own quick terminal stays for short commands (dbt, sqlfluff,
-read-only git): it runs on the workers, so it refuses anything else.
-
 ## 6. Every environment variable (reference)
 
 Full template with inline comments: [.env.example](../.env.example). Grouped
@@ -781,18 +728,6 @@ here by what they control; the backend's `app/core/config.py`,
 | `PORTAL_BACKUPS_HOST` | — | That folder as people find it on the host, shown on the Backups tab. setup.sh / setup.ps1 / the setup window fill it in. |
 | `BACKUP_INTERVAL_HOURS` / `BACKUP_KEEP` | `24` / `14` | An automatic backup every so many hours (`0`: only *Back up now*), keeping this install's newest so many. |
 | `BACKEND_TAG` / `FRONTEND_TAG` / `CUBE_TAG` / `IMAGE_REGISTRY` | `latest` / `ghcr.io/omaryehia015` | Compose: which images to run. Take them from one release in `releases.yml`. |
-
-**VS Code (section 5c, optional):**
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `COMPOSE_PROFILES` | — | `ide` starts the ide service (compose). |
-| `IDE_URL` / `IDE_SECRET` | — | Backend: where the ide service is and the secret it shares with it. Both set: dbt Development and the DAG Studio offer VS Code. |
-| `IDE_UPSTREAM` | — | Frontend container: `host:port` of the ide service, served under `/ide/` (HTTP and WebSockets). |
-| `IDE_PORTAL_URL` | `http://frontend:8080` | Backend: where Portal AI in VS Code reaches the portal's API (the gateway). |
-| `IDE_SESSION_HOURS` | `12` | Backend: how long a VS Code sign-in and Portal AI's token last; opening VS Code again renews them. |
-| `IDE_MAX_SESSIONS` / `IDE_IDLE_MINUTES` / `IDE_MEMORY` | `8` / `60` / `6g` | ide service: developers with VS Code open at once, minutes before an unused one stops, the container's memory limit. |
-| `EXTENSIONS_GALLERY` | Open VSX | ide service: code-server's own setting, another extension marketplace. |
 
 **The dbt project and the warehouse:**
 
