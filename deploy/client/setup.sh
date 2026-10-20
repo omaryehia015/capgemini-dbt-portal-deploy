@@ -9,6 +9,7 @@
 #   ./setup.sh /path/to/my-dbt-project --port 8081 --release 2026.10.0
 #   ./setup.sh /path/to/my-dbt-project --skip-pull     # images already here (docker load)
 #   ./setup.sh /path/to/my-dbt-project --workers 3     # run more dbt jobs at once
+#   ./setup.sh --vscode                                # each developer's own VS Code in the portal
 #   ./setup.sh --answers portal.answers                # zero-touch: no questions asked
 #   ./setup.sh --check                                 # only check this machine
 #
@@ -22,8 +23,8 @@
 # script signs in for you.
 #
 # An answers file is KEY=VALUE lines: PROJECT, PORT, RELEASE and WORKERS set
-# the options above; any other key (AIRFLOW_URL, AIRBYTE_MODE=off, ...) is
-# written to .env. See portal.answers.example.
+# the options above (VSCODE=yes is --vscode); any other key (AIRFLOW_URL,
+# AIRBYTE_MODE=off, ...) is written to .env. See portal.answers.example.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # Works from the repo (deploy/client/) and from the unpacked client kit (flat).
@@ -42,6 +43,7 @@ ANSWERS=""
 CHECK_ONLY=""
 NON_INTERACTIVE=""
 NO_BROWSER=""
+VSCODE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --port) PORT="$2"; shift 2 ;;
@@ -53,7 +55,8 @@ while [[ $# -gt 0 ]]; do
         --skip-pull) SKIP_PULL=1; shift ;;
         --check) CHECK_ONLY=1; shift ;;
         --no-browser) NO_BROWSER=1; shift ;;
-        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+        --vscode) VSCODE=1; shift ;;
+        -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
         *) PROJECT="$1"; shift ;;
     esac
 done
@@ -77,6 +80,7 @@ if [[ -n "$ANSWERS" ]]; then
             PORT) [[ -n "$PORT" ]] || PORT="$value" ;;
             RELEASE) [[ -n "$RELEASE" ]] || RELEASE="$value" ;;
             WORKERS) WORKERS="$value" ;;
+            VSCODE) [[ "$value" =~ ^(1|yes|true|on)$ ]] && VSCODE=1 ;;
             *) EXTRA_ENV+=("$key=$value") ;;
         esac
     done < "$ANSWERS"
@@ -117,9 +121,17 @@ if [[ ! -f .env ]]; then
     cp .env.example .env
     chmod 600 .env
 fi
-for key in JWT_SECRET CUBE_API_SECRET POSTGRES_PASSWORD REDIS_PASSWORD; do
+for key in JWT_SECRET CUBE_API_SECRET POSTGRES_PASSWORD REDIS_PASSWORD IDE_SECRET; do
     [[ -n "$(get_env "$key")" ]] || set_env "$key" "$(secret)"
 done
+# VS Code (the ide service, a compose profile): on with --vscode, and it stays on.
+if [[ -n "$VSCODE" ]]; then
+    profiles="$(get_env COMPOSE_PROFILES)"
+    [[ ",$profiles," == *",ide,"* ]] || set_env COMPOSE_PROFILES "${profiles:+$profiles,}ide"
+    set_env IDE_URL http://ide:8090
+    set_env IDE_UPSTREAM ide:8090
+    ok "VS Code for the developers: on (about 1 GB of RAM per developer using it)"
+fi
 # Empty: compose falls back to its own workspace volume, where the portal clones the repository.
 if [[ -n "$GIT_MODE" ]]; then set_env DBT_PROJECT_PATH ""; else set_env DBT_PROJECT_PATH "$PROJECT"; fi
 # The host folder shared with the portal (kept from before when none is given;

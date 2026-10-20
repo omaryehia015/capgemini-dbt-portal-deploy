@@ -8,6 +8,7 @@
 #   .\setup.ps1 -Project C:\work\my-dbt-project -Port 8081 -Release 2026.10.0
 #   .\setup.ps1 -Project C:\work\my-dbt-project -SkipPull     # images already here (docker load)
 #   .\setup.ps1 -Project C:\work\my-dbt-project -Workers 3    # run more dbt jobs at once
+#   .\setup.ps1 -VsCode                                       # each developer's own VS Code in the portal
 #   .\setup.ps1 -Answers portal.answers                       # zero-touch: no questions asked
 #   .\setup.ps1 -Check                                         # only check this machine
 #
@@ -17,8 +18,8 @@
 # Warehouse credentials stay in the project's own .env.
 #
 # An answers file is KEY=VALUE lines: PROJECT, PORT, RELEASE and WORKERS set
-# the options above; any other key (AIRFLOW_URL, AIRBYTE_MODE=off, ...) is
-# written to .env. See portal.answers.example.
+# the options above (VSCODE=yes is -VsCode); any other key (AIRFLOW_URL,
+# AIRBYTE_MODE=off, ...) is written to .env. See portal.answers.example.
 # Private images: set $env:PORTAL_TOKEN (a read-only registry token, with
 # $env:PORTAL_USER_NAME to override the user name the token belongs to) and the
 # script signs in for you.
@@ -34,6 +35,7 @@ param(
     [switch]$NonInteractive,
     [switch]$SkipPull,
     [switch]$NoBrowser,
+    [switch]$VsCode,
     [switch]$Check
 )
 $ErrorActionPreference = "Stop"
@@ -63,6 +65,7 @@ if ($Answers) {
             "PORT" { if ($Port -eq 0) { $Port = [int]$value } }
             "RELEASE" { if (-not $Release) { $Release = $value } }
             "WORKERS" { $Workers = [int]$value }
+            "VSCODE" { if ($value -match '^(1|yes|true|on)$') { $VsCode = $true } }
             default { $extraEnv[$key] = $value }
         }
     }
@@ -101,8 +104,16 @@ if ($GitMode) {
 # -- 3. .env: secrets once, project / port / versions every run ----------------
 function New-Secret { $b = New-Object byte[] 30; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); ([Convert]::ToBase64String($b) -replace '[/+=]', '') }
 if (-not (Test-Path .env)) { Say "Writing .env with generated secrets"; Copy-Item .env.example .env }
-foreach ($key in "JWT_SECRET", "CUBE_API_SECRET", "POSTGRES_PASSWORD", "REDIS_PASSWORD") {
+foreach ($key in "JWT_SECRET", "CUBE_API_SECRET", "POSTGRES_PASSWORD", "REDIS_PASSWORD", "IDE_SECRET") {
     if (-not (Get-Env $key)) { Set-Env $key (New-Secret) }
+}
+# VS Code (the ide service, a compose profile): on with -VsCode, and it stays on.
+if ($VsCode) {
+    $profiles = @((Get-Env COMPOSE_PROFILES) -split ',' | Where-Object { $_ })
+    if ($profiles -notcontains 'ide') { Set-Env COMPOSE_PROFILES ((@($profiles) + 'ide') -join ',') }
+    Set-Env IDE_URL 'http://ide:8090'
+    Set-Env IDE_UPSTREAM 'ide:8090'
+    Ok "VS Code for the developers: on (about 1 GB of RAM per developer using it)"
 }
 
 # Podman's Windows client mangles absolute paths (/mnt/c/mnt/c/...): give it a folder

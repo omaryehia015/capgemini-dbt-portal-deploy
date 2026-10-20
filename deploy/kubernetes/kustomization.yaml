@@ -24,6 +24,8 @@ resources:
   - cube.yaml
   - frontend.yaml
   - ingress.yaml
+  # VS Code for the developers (optional, see its header):
+  # - ide.yaml
 
 configMapGenerator:
   - name: dbt-portal-config
@@ -45,4 +47,8 @@ images:
     newTag: "1.0.0"
   - name: capgemini-dbt-portal-frontend
     newName: ghcr.io/omaryehia015/capgemini-dbt-portal-frontend
+    newTag: "1.0.0"
+  # Built from the backend repo: always the backend's tag.
+  - name: capgemini-dbt-portal-ide
+    newName: ghcr.io/omaryehia015/capgemini-dbt-portal-ide
     newTag: "1.0.0"

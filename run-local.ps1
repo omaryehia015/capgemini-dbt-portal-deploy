@@ -2,6 +2,7 @@
 #
 #   .\run-local.ps1                       # uses ..\capgemini_dbt_core as the dbt project
 #   .\run-local.ps1 -Project C:\work\my-dbt-project -Port 8090
+#   .\run-local.ps1 -Ide                  # with VS Code for the developers (the ide service)
 #   .\run-local.ps1 -Down                 # stop it (data is kept; add -Wipe to delete it)
 #
 # Needs Docker or Podman with compose, and the backend, frontend and cube repos
@@ -11,6 +12,7 @@
 param(
     [string]$Project = (Join-Path $PSScriptRoot "..\capgemini_dbt_core"),
     [int]$Port = 8090,
+    [switch]$Ide,
     [switch]$Down,
     [switch]$Wipe
 )
@@ -44,13 +46,17 @@ $keep = { param($k) if ($old[$k]) { $old[$k] } else { Secret } }
     "DBT_PROJECT_PATH=$rel", "PORTAL_PORT=$Port", "PORTAL_USER=0:0",
     "ENVIRONMENT=development", "LOG_FORMAT=text", "PREFLIGHT_ON_START=false",
     "JWT_SECRET=$(& $keep 'JWT_SECRET')", "CUBE_API_SECRET=$(& $keep 'CUBE_API_SECRET')",
-    "POSTGRES_PASSWORD=$(& $keep 'POSTGRES_PASSWORD')", "REDIS_PASSWORD=$(& $keep 'REDIS_PASSWORD')"
+    "POSTGRES_PASSWORD=$(& $keep 'POSTGRES_PASSWORD')", "REDIS_PASSWORD=$(& $keep 'REDIS_PASSWORD')",
+    "IDE_SECRET=$(& $keep 'IDE_SECRET')"
 ) | Set-Content .env -Encoding ascii
+# VS Code: the ide service's compose profile and where the backend and the gateway find it.
+if ($Ide) { @("COMPOSE_PROFILES=ide", "IDE_URL=http://ide:8090", "IDE_UPSTREAM=ide:8090") | Add-Content .env -Encoding ascii }
 
 # podman prints a notice on stderr; that is not a failure, so judge by the exit code.
 $ErrorActionPreference = "Continue"
 # One image at a time: building them all in parallel can exhaust a small Podman VM.
-foreach ($svc in "backend", "cube", "frontend") {
+$services = @("backend", "cube", "frontend") + $(if ($Ide) { @("ide") } else { @() })
+foreach ($svc in $services) {
     & $compose[0] $compose[1..($compose.Length - 1)] build $svc 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE -ne 0) { throw "build of $svc failed" }
 }

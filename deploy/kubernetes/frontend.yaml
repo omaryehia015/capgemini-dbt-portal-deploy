@@ -20,6 +20,9 @@ spec:
             - containerPort: 8080
           env:
             - { name: BACKEND_UPSTREAM, value: "dbt-portal-backend:8000" }
+            # VS Code under /ide/, once IDE_UPSTREAM is in portal.env (ide.yaml).
+            - name: IDE_UPSTREAM
+              valueFrom: { configMapKeyRef: { name: dbt-portal-config, key: IDE_UPSTREAM, optional: true } }
           readinessProbe:
             httpGet: { path: /, port: 8080 }
             periodSeconds: 15

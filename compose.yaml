@@ -5,6 +5,7 @@
 #                    │          reports, Ask AI, semantic layer  -> postgres (portal)
 #                    ├─ worker(s) run the dbt jobs it queues      -> redis (queue, live logs)
 #                    └─ cube      the semantic layer engine; reads its config from backend
+#              └─ ide (optional) each developer's own VS Code under /ide/ (COMPOSE_PROFILES=ide)
 #
 # Only the frontend port is published; everything else is on the internal network.
 #
@@ -102,6 +103,8 @@ services:
       # Backups (Users & Access > Backups): BACKUP_KEEP and BACKUP_INTERVAL_HOURS in .env.
       BACKUP_DIR: /backups
       PORTAL_BACKUPS_HOST: ${PORTAL_BACKUPS_HOST:-}
+    # ide: it starts the developers' VS Code sessions (IDE_URL, IDE_SECRET in .env).
+    networks: [default, ide]
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -191,9 +194,48 @@ services:
       # of that port (no Airflow change).
       AIRFLOW_UPSTREAM: ${AIRFLOW_UPSTREAM:-}
       AIRFLOW_UI_PORT: ${AIRFLOW_UI_PORT:-}
+      # The developers' VS Code under /ide/ (the ide service below), when it is on.
+      IDE_UPSTREAM: ${IDE_UPSTREAM:-}
+    networks: [default, ide]
     extra_hosts:
       # Docker on Linux has no host alias by default; Podman/Docker Desktop do.
       - "host.docker.internal:host-gateway"
+
+  # VS Code for the developers (the backend repo's ide/hub.py): one code-server
+  # per developer, each as a Linux user of their own, opened from dbt
+  # Development and the DAG Studio and served by the frontend under /ide/.
+  # Off unless COMPOSE_PROFILES=ide (setup.sh --vscode). It gets IDE_SECRET and
+  # nothing else of the portal's: not .env, and its network reaches only the
+  # frontend and the backend, never PostgreSQL or Redis.
+  ide:
+    image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-ide:${BACKEND_TAG:-latest}
+    profiles: ["ide"]
+    restart: unless-stopped
+    environment:
+      IDE_SECRET: "${IDE_SECRET:-}"
+      IDE_MAX_SESSIONS: ${IDE_MAX_SESSIONS:-8}
+      IDE_IDLE_MINUTES: ${IDE_IDLE_MINUTES:-60}
+    volumes:
+      # The developers' homes: their clones, settings and extensions.
+      - ide_homes:/home/portal
+    networks: [ide]
+    expose: ["8090"]
+    # Root inside, only to start each developer's VS Code as their own user:
+    # these capabilities and no others, and nothing gains privileges after.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, KILL, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: ${IDE_MEMORY:-6g}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/python3", "/opt/ide/hub.py", "--check"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+networks:
+  # The ide service's: the frontend and the backend reach it, it reaches them.
+  ide:
 
 volumes:
   postgres_data:
@@ -205,3 +247,4 @@ volumes:
   semantic_data:
   workspace:
   projects:
+  ide_homes:

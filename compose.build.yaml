@@ -23,3 +23,11 @@ services:
     build:
       context: ../capgemini-dbt-portal-frontend
       args: { APP_VERSION: local }
+  # Only with COMPOSE_PROFILES=ide (run-local.ps1 -Ide).
+  ide:
+    profiles: ["ide"]
+    image: capgemini-dbt-portal-ide:source
+    build:
+      context: ../capgemini-dbt-portal-backend
+      dockerfile: ide/Dockerfile
+      args: { APP_VERSION: local }
