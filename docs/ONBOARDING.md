@@ -898,6 +898,17 @@ unrouted goes to the default channels. Each channel gets one message listing
 its failures, with Elementary's description of the result when the project
 uses Elementary. *Check routing* shows where the last run's failures would go.
 
+Every channel also says which kinds of environment (Dev, Test, Prod) it
+accepts alerts from, so a production channel is not paged by a dev run: a
+failure from a Dev environment never reaches a Prod-only channel, even when a
+rule or `meta.channel` names it, and the same goes for the default fallback.
+New channels must pick at least one kind; channels from before this accept
+all three. The **On/Off** button on a channel is a hard switch: an off channel
+receives nothing (rules and defaults skip it) until it is switched on, and
+keeps its setup. Admins and anyone with `alerts.manage` can use it; a test
+message still reaches an off channel. *Check routing* marks routes a channel
+would refuse for the current environment.
+
 ```yaml
 models:
   - name: fct_revenue
