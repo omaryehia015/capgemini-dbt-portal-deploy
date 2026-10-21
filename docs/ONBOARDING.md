@@ -531,7 +531,7 @@ role may open).
 
 | Role | Can do | Environments |
 |---|---|---|
-| Admin | everything: users and roles, and configuration (`platform.manage`: Setup Assistant, environments, modules, warehouse, AI, email, alert channels) | all |
+| Admin | everything: users and roles, and configuration (`platform.manage`: Setup Assistant, environments, modules, warehouse, AI, email, alert channels, which pages the menu shows) | all |
 | Data Engineer | develop and run dbt, DAG Studio, Airflow/Airbyte, alert rules, job history. In Dev, connects their **own** folder (dbt project and DAGs) without affecting colleagues | all |
 | Data Analyst | reports: docs, lineage, Elementary, FinOps, Semantic, Ask AI | production |
 | Auditor | audit trail (and CSV export), read-only users and roles, every job's history | production |
