@@ -537,7 +537,15 @@ role may open).
 | Auditor | audit trail (and CSV export), read-only users and roles, every job's history | production |
 
 `platform.manage` can be granted to another role from the matrix; changing
-users and roles always stays with the Admin role.
+users and roles always stays with the Admin role. Nobody can disable, delete
+or change the role of their own account (another admin does it), and the last
+active Admin can't be removed.
+
+New portal passwords need 10+ characters, letters mixed with numbers or
+symbols, and nothing easy to guess (common words such as "password" or
+"welcome", keyboard runs, the username). Five wrong passwords lock that account
+for 15 minutes **from that address only**, so nobody can lock the admin out
+from elsewhere; 30 failures from one address block it for any account.
 
 Credentials belong to their environment and only `platform.manage` sets them.
 A run always uses the environment it is started in (another environment's
@@ -754,6 +762,8 @@ here by what they control; the backend's `app/core/config.py`,
 | `ACCESS_TOKEN_MINUTES` | `15` | Browser access cookie lifetime; renewed silently before it expires. |
 | `REFRESH_TOKEN_DAYS` | `7` | How long a browser stays signed in without activity. Rotated on every renewal; revoked on logout, account disable and password reset. |
 | `COOKIE_SECURE` | automatic | Force the Secure flag on session cookies on (`true`) or off (`false`). Unset: Secure when the request arrived over HTTPS (directly or with `X-Forwarded-Proto: https`). |
+| `FORWARDED_HOPS` | `0` | Backend: proxies in front of the portal's gateway that add to `X-Forwarded-For` (an ingress, a TLS load balancer). Failed sign-ins are counted per caller address (5 per account and address, 30 per address, 15 minutes), and this tells the backend where the real address sits. `1` behind the Kubernetes ingress. Too low makes every user share the proxy's address. |
+| `PORTAL_CSP` | built in | Frontend container: replaces the SPA's `Content-Security-Policy`. The default allows scripts from the portal only, frames of any `http(s)` page (Airflow, Airbyte, ETL tools) and framing of the portal by itself only (`frame-ancestors 'self'`). Set it to let an intranet page embed the portal. No double quotes, `$` or backslashes. |
 | `ENVIRONMENT` | `production` | Gates the JWT-secret check and seed-password behavior above. `development` only for local demos. |
 | `SEED_ADMIN_PASSWORD` / `SEED_ENGINEER_PASSWORD` / `SEED_ANALYST_PASSWORD` / `SEED_AUDITOR_PASSWORD` | dev defaults, else random | Initial password for each seeded account. |
 | `CORS_ORIGINS` | `["http://localhost:5173"]` | Only relevant if the frontend is served from a different origin than the API (not the case for any setup above: the gateway serves both). |

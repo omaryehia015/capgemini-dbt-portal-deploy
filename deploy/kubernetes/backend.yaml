@@ -32,6 +32,8 @@ spec:
           env:
             - { name: EXECUTION_ROLE, value: api }
             - { name: BACKUP_DIR, value: /backups }
+            # The ingress adds itself to X-Forwarded-For: the caller is one entry earlier.
+            - { name: FORWARDED_HOPS, value: "1" }
           volumeMounts:
             - { name: workspace, mountPath: /workspace }
             - { name: data, mountPath: /data }
