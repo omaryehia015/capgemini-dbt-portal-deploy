@@ -882,7 +882,9 @@ running, the page says "No execution worker picked up the job".
 schedule* with a cron expression and a time zone. A schedule runs as the user
 who last saved it, and stops firing if that user is disabled or loses
 `dbt.execute`. A slot missed while every worker was down runs late only
-within 5 minutes; older ones are skipped, not replayed.
+within 5 minutes; older ones are skipped, not replayed. A cron expression no
+date matches (31 February, 31 April) is refused, because it would never run;
+the editor says so under the expression before you save.
 
 **Failure alerts.** Governance → Failure alerts. Admins add *channels*: any
 number of Slack or Teams webhooks and email lists, each under a name such as
@@ -894,6 +896,8 @@ roles) writes *routing rules* that send failures to channels by dbt tag,
 `meta.owner` or model name/path glob, and can send a test to any channel. A
 rule can also list email addresses directly (a person, a team list), so
 specific people get their failures by email without an admin adding a channel.
+A channel that a rule still sends to cannot be removed: the page names those
+rules, so you can take the channel out of them (or delete them) first.
 
 **Mail server.** Email channels, the addresses on rules and email sign-in
 codes go through the SMTP server an admin saves on the same page (host, port,
