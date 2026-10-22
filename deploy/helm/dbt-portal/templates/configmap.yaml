@@ -1,0 +1,27 @@
+{{- include "dbt-portal.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dbt-portal.configName" . }}
+  labels:
+    {{- include "dbt-portal.labels" (dict "root" . "component" "config") | nindent 4 }}
+# Non-secret settings of the backend and the worker. Secrets are in the Secret
+# (see values.yaml: secrets), never here.
+data:
+  ENVIRONMENT: {{ .Values.config.environment | quote }}
+  LOG_FORMAT: {{ .Values.config.logFormat | quote }}
+  DBT_PROJECT_DIR: "/workspace"
+  CUBE_API_URL: {{ printf "http://%s:%v" (include "dbt-portal.componentName" (dict "root" . "component" "cube")) .Values.cube.service.port | quote }}
+  DBT_DEPS_ON_START: {{ .Values.config.dbtDepsOnStart | toString | quote }}
+  {{- with .Values.config.dbtTarget }}
+  DBT_TARGET: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.project.subdir }}
+  DBT_PROJECT_SUBDIR: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.project.profiles.existingSecret }}
+  DBT_PROFILES_DIR: "/etc/dbt"
+  {{- end }}
+  {{- range $key, $value := .Values.config.extra }}
+  {{ $key }}: {{ $value | toString | quote }}
+  {{- end }}

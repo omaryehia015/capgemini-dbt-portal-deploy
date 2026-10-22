@@ -1,0 +1,20 @@
+apiVersion: v2
+name: dbt-portal
+description: Capgemini dbt Portal - the frontend gateway, the backend API, the dbt workers and the Cube semantic engine
+type: application
+# The chart's own version: bump it when the chart changes.
+version: 0.1.0
+# The portal release this chart was last aligned with (releases.yml "latest").
+# The image tags are NOT taken from here: they are required values, resolved from
+# releases.yml by scripts/release-tags.sh (see README.md). CI checks this field
+# against releases.yml.
+appVersion: "2026.10.19"
+home: https://github.com/omaryehia015/capgemini-dbt-portal-deploy
+keywords:
+  - dbt
+  - portal
+  - cube
+# No kubeVersion constraint on purpose: the supported Kubernetes versions are not
+# decided yet. The chart uses only long-stable APIs (apps/v1, v1,
+# networking.k8s.io/v1, policy/v1). Record the versions it is tested on in
+# docs/KUBERNETES.md before declaring support.

@@ -38,6 +38,7 @@ PROJECTS_ROOT=""
 RELEASE=""
 SKIP_PULL=""
 WORKERS=1
+WORKERS_SET=""
 ANSWERS=""
 CHECK_ONLY=""
 NON_INTERACTIVE=""
@@ -47,7 +48,7 @@ while [[ $# -gt 0 ]]; do
         --port) PORT="$2"; shift 2 ;;
         --release) RELEASE="$2"; shift 2 ;;
         --projects-root) PROJECTS_ROOT="$2"; shift 2 ;;
-        --workers) WORKERS="$2"; shift 2 ;;
+        --workers) WORKERS="$2"; WORKERS_SET=1; shift 2 ;;
         --answers) ANSWERS="$2"; NON_INTERACTIVE=1; shift 2 ;;
         --non-interactive) NON_INTERACTIVE=1; shift ;;
         --skip-pull) SKIP_PULL=1; shift ;;
@@ -76,7 +77,7 @@ if [[ -n "$ANSWERS" ]]; then
             PROJECTS_ROOT) [[ -n "$PROJECTS_ROOT" ]] || PROJECTS_ROOT="$value" ;;
             PORT) [[ -n "$PORT" ]] || PORT="$value" ;;
             RELEASE) [[ -n "$RELEASE" ]] || RELEASE="$value" ;;
-            WORKERS) WORKERS="$value" ;;
+            WORKERS) WORKERS="$value"; WORKERS_SET=1 ;;
             *) EXTRA_ENV+=("$key=$value") ;;
         esac
     done < "$ANSWERS"
@@ -293,6 +294,10 @@ if [[ -z "$SKIP_PULL" ]]; then
     fi
 fi
 say "Starting (this takes a minute on first start: databases, migrations)"
+# The worker count is kept in .env (PORTAL_WORKERS): an upgrade, a restart and the systemd service
+# (manage.sh service install) all start the same number again.
+if [[ -n "$WORKERS_SET" ]]; then set_env PORTAL_WORKERS "$WORKERS"
+elif [[ -n "$(get_env PORTAL_WORKERS)" ]]; then WORKERS="$(get_env PORTAL_WORKERS)"; fi
 "${C[@]}" up -d --remove-orphans --scale worker="$WORKERS"
 wait_healthy "$PORT" || fail "Not up after 5 minutes. See: ./manage.sh status; ./manage.sh logs backend"
 

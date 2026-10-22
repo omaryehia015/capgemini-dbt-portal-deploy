@@ -26,7 +26,7 @@
   .tabs button { background: none; border: 0; padding: 7px 16px; font: inherit; color: var(--muted); cursor: pointer; }
   .tabs button[aria-selected="true"] { background: var(--accent-bg); color: var(--primary); font-weight: 600; }
   label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 4px; }
-  input[type=password], input[type=text] { width: 100%; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border);
+  input[type=password], input[type=text], select { width: 100%; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border);
          background: var(--bg); color: var(--text); font: inherit; }
   input:focus, button:focus-visible, a:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
@@ -85,6 +85,14 @@
   <section class="card" id="unix" hidden>
     <h2>macOS / Linux</h2>
     <p>Open a terminal, paste this, press Enter. It asks the rest.</p>
+    <label for="mode">Where will it run?</label>
+    <select id="mode">
+      <option value="local">This computer (Docker or Podman)</option>
+      <option value="server">A Linux server (Docker or Podman Compose)</option>
+      <option value="service">A Linux server, as a service that starts at boot (systemd)</option>
+      <option value="kubernetes">Kubernetes (Helm)</option>
+    </select>
+    <div class="hint" id="mode-hint"></div>
     <label for="token-unix">Access token</label>
     <input id="token-unix" type="password" autocomplete="off" placeholder="paste the token you were sent">
     <pre id="cmd" aria-live="polite"></pre>
@@ -118,7 +126,17 @@
     $("win").hidden = os !== "win";
     $("unix").hidden = os !== "unix";
     var token = $("token-unix").value.trim() || "<paste your token>";
-    $("cmd").textContent = "curl -fsSL " + RAW + "install.sh | PORTAL_TOKEN=" + shq(token) + " bash";
+    var mode = $("mode").value;
+    // The service is a system unit: root. `sudo env` passes the variables whatever sudoers says.
+    var run = mode === "service" ? "sudo env " : "";
+    var vars = "PORTAL_TOKEN=" + shq(token) + (mode === "local" ? "" : " PORTAL_MODE=" + mode);
+    $("cmd").textContent = "curl -fsSL " + RAW + "install.sh | " + run + vars + " bash";
+    $("mode-hint").textContent = {
+      local: "Starts the portal here and opens it in your browser.",
+      server: "Starts the portal on this server (port 8080). Docker or Podman with Compose; nothing is built, the images are pulled.",
+      service: "As server, then installs a systemd service so the portal starts at boot. Run as root; rootless Podman: run it as your user without sudo.",
+      kubernetes: "Needs helm and kubectl pointed at your cluster. Installs a TRIAL (bundled database); for production use your own values, see the README."
+    }[mode];
     $("copied").hidden = true;
   }
 
@@ -147,6 +165,7 @@
   $("tab-win").onclick = function () { os = "win"; render(); };
   $("tab-unix").onclick = function () { os = "unix"; render(); };
   $("token-unix").oninput = render;
+  $("mode").onchange = render;
   $("copy").onclick = function () {
     var text = $("cmd").textContent;
     var done = function () { $("copied").hidden = false; };

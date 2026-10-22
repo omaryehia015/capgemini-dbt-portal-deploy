@@ -124,6 +124,99 @@ ports and services (such as the semantic layer's SQL port, 15432) arrive with
 it; a replaced compose file is kept as `<name>.bak`. Put your own changes in
 `compose.override.yaml`, not in `compose.yaml`.
 
+**Cube's SQL port (15432) is published on this machine only** (`127.0.0.1`). BI tools on *other*
+machines connect only after you add `CUBE_SQL_BIND=0.0.0.0` to `.env` and restart (restrict the
+port with the host firewall or a VPN: it is the Postgres protocol without TLS). Earlier compose
+files published it on every interface, so an upgrade changes this.
+
+## Where to run it: this computer, a server, a service, Kubernetes
+
+One download, four ways to run the same portal. **The images are always pulled from the
+registry; nothing is built** (the kit has no build files). Pick the mode with `PORTAL_MODE` (or
+`--mode`) on the one-line installer; the download page builds the command for you.
+
+| Where | Mode | You need | How it runs |
+|---|---|---|---|
+| Your computer (Windows, macOS, Linux) | `local` (default) | Docker Desktop / Docker Engine, or Podman, with Compose | Compose; opens the portal |
+| A Linux server | `server` | Docker or Podman, with Compose | Compose, started now; start it again with `./manage.sh start` |
+| A Linux server, starting at boot | `service` | the same, plus systemd | the same Compose stack, run by a **systemd service** |
+| A Kubernetes cluster | `kubernetes` | `helm` and `kubectl` pointed at the cluster | the **Helm chart** in this kit |
+
+```bash
+# the token you were sent is needed for the private images in every mode
+T='<token you were sent>'
+R=https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.sh
+
+curl -fsSL $R | PORTAL_TOKEN=$T bash                                         # this computer
+curl -fsSL $R | PORTAL_TOKEN=$T PORTAL_MODE=server bash                      # a server, Compose
+curl -fsSL $R | sudo env PORTAL_TOKEN=$T PORTAL_MODE=service bash            # a server, systemd service (root)
+curl -fsSL $R | PORTAL_TOKEN=$T PORTAL_MODE=kubernetes bash                  # Kubernetes, a TRIAL install
+```
+
+On **Windows** the installer (`Install-DbtPortal.cmd`, or `install.ps1`) runs the portal on that
+computer with Docker Desktop or Podman. A Linux server or Kubernetes is installed with `install.sh`,
+from WSL or a Linux host.
+
+### A Linux server: Compose, or a service
+
+`server` installs into `/opt/dbt-portal` when run as root (`PORTAL_DIR` changes it) and starts the
+stack. Docker restarts the containers when its daemon starts (`restart: unless-stopped`); Podman does
+not restart containers at boot by itself. For a server that must come back by
+itself after a reboot, use **`service`**: it also installs a systemd unit that runs the same stack:
+
+```bash
+sudo ./manage.sh service install --workers 3     # root: Docker, or rootful Podman
+./manage.sh service install --user               # rootless Podman, as your user (turns on lingering)
+sudo systemctl status dbt-portal                 # restart, stop: systemctl restart|stop dbt-portal
+./manage.sh service print                        # the unit file, nothing written
+sudo ./manage.sh service uninstall               # removes the unit; containers and data stay
+```
+
+The unit is one `oneshot` unit that stays active: starting it runs `./manage.sh start` (`compose up -d`),
+stopping it runs `./manage.sh stop` (a running dbt step gets its grace period). It pins the engine it
+was installed for (`PORTAL_ENGINE`), waits for Docker, and starts the number of workers kept in
+`.env` as `PORTAL_WORKERS` (`setup.sh --workers`, `service install --workers`). Docker's daemon is a
+system service, so Docker needs the root form; `--user` is for rootless Podman. The portal's port
+(8080) is open on every interface by default (`PORTAL_BIND`): put a firewall or a TLS reverse proxy in
+front of a server.
+
+### Kubernetes
+
+The kit contains the chart (`deploy/helm/dbt-portal`) and `portal.sh`, which resolves the image tags
+of this release, creates the registry pull Secret from your token (it never appears in a command
+line or on screen) and runs Helm.
+
+```bash
+# a TRIAL: bundled PostgreSQL and Redis (one pod, one disk each), a generated Secret
+curl -fsSL $R | PORTAL_TOKEN=$T PORTAL_MODE=kubernetes bash
+kubectl -n dbt-portal port-forward svc/dbt-portal-frontend 8080:8080          # http://localhost:8080
+
+# PRODUCTION: your own values (external PostgreSQL and Redis, an existing Secret, storage, ingress)
+cd ~/dbt-portal
+cp deploy/helm/dbt-portal/values-prod.yaml my-prod.yaml                       # edit it; keep it out of git
+./portal.sh helm-template --values my-prod.yaml --set project.git.url=<your repo>   # read it first
+PORTAL_TOKEN=$T ./portal.sh helm-install --pull-secret --values my-prod.yaml  # asks before it installs
+```
+
+**Upgrading.** The chart travels in the kit, so an upgrade uses the *newer* kit: run the installer again
+with `PORTAL_RELEASE=<newer>` (add `--values my-prod.yaml` after `bash -s --` for a production install).
+It unpacks that kit over this one, sees that the release exists, and runs `helm-upgrade` with the newer
+chart and tags. Your values file, your Secret and the volumes are not touched.
+
+The same chart is also on the registry, version = the release (`oci://ghcr.io/<owner>/charts/dbt-portal`):
+`PORTAL_TOKEN=$T ./portal.sh helm-upgrade --chart oci://ghcr.io/<owner>/charts/dbt-portal --values my-prod.yaml`
+fetches it instead of using the kit's copy (`--chart-version V` picks another one).
+
+Coming from the pre-2026.11 layout (two databases)? `--set legacyMigration.enabled=true` runs a one-off
+hook Job that moves the data into one, before the install or upgrade; see `docs/KUBERNETES.md`.
+
+Production needs decisions only you can make: a ReadWriteMany storage class for the workspace, an
+ingress class and hostname, TLS, managed PostgreSQL and Redis, and a Secret you create yourself
+(`JWT_SECRET`, `CUBE_API_SECRET`, `PORTAL_SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`). The full guide, with
+every setting and the Secret keys, is `docs/KUBERNETES.md` in the
+[deploy repository](https://github.com/omaryehia015/capgemini-dbt-portal-deploy); the chart's own
+`values.yaml` documents every key.
+
 ## How the portal finds your project
 
 The path you give the script is written to `.env` as `DBT_PROJECT_PATH` and
@@ -172,9 +265,10 @@ From the folder with `compose.yaml` (on Windows: `.\manage.ps1 <command>`):
 ./manage.sh restore             # bring back the newest backup (or: restore <file name>)
 ./manage.sh reset-password      # a new admin password (or: reset-password <user>), shown once
 ./manage.sh services            # what each service does
+./manage.sh service install     # Linux server: run the stack as a systemd service that starts at boot (see above)
 ```
 
-More dbt jobs at once: `./setup.sh <project> --workers 3`.
+More dbt jobs at once: `./setup.sh <project> --workers 3` (kept in `.env` as `PORTAL_WORKERS`, so a restart, an upgrade and the systemd service keep it).
 
 ### Backups
 
@@ -219,17 +313,21 @@ backups, so you can bring that data back.
 | `doctor` says Docker/Podman is not running | Start Docker Desktop / Podman Desktop, then run the command again. |
 | A service is `unhealthy` or keeps restarting | `./manage.sh logs <service>`. The backend's log starts with an `[OK]`/`[WARN]`/`[FAIL]` self-check of the project, the warehouse connection and the configuration. |
 | The portal does not answer | `./manage.sh logs frontend backend`; check nothing else uses the port (`--port 8081` to move it). |
+| The server came back from a reboot without the portal | Docker restarts the containers by itself; Podman does not. Install the service: `sudo ./manage.sh service install` (rootless Podman: `./manage.sh service install --user`). |
 | Lost the admin password | Run the setup app again and click **Forgot the admin password?**, or `./manage.sh reset-password` (`.\manage.ps1 reset-password`; inside the Podman machine: `podman machine ssh "cd ~/dbt-portal && ./manage.sh reset-password"`). It prints a new one, once. Another admin can also set one in Governance → Users. |
 | A module's Test connection fails | The failing line says why; its setup guide on the module page lists the usual fixes. |
 
-**Uninstall:** `docker compose down -v` (deletes the accounts and history).
+**Uninstall:** `docker compose down -v` (deletes the accounts and history). If you installed the systemd
+service, remove it first: `sudo ./manage.sh service uninstall` (the containers and data stay until `down -v`).
 Your dbt project is never deleted, and neither is the backups folder: delete
 it yourself if you no longer need it.
 
 ## Just one laptop?
 
 `compose.single.yaml` runs every backend service in one container on SQLite:
-fewer moving parts, but it does not scale past one machine.
+fewer moving parts, but it does not scale past one machine. It publishes only the portal, on
+`127.0.0.1:8080` (this computer): `PORTAL_BIND=0.0.0.0` in `.env` shares it on the network, but a shared
+portal should run the full stack.
 
 ```bash
 docker compose -f compose.single.yaml up -d

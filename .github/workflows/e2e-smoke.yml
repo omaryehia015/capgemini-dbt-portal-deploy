@@ -2,9 +2,10 @@
 # run a dbt command (it lands on a worker), see it in the run history.
 #
 # Runs on:
-#   - a component release (repository_dispatch from the backend, frontend or
-#     cube repo): the new version, with the other two from releases.yml's latest
-#   - a PR to this repo (compose, k8s, releases.yml changes): releases.yml's latest
+#   - a component-released dispatch (repository_dispatch): the new version, with the other two from
+#     releases.yml's latest. The listener is kept; the component pipelines do not send this event
+#     today (they send image-published, which record-image.yml handles)
+#   - a PR to this repo (compose, chart, releases.yml changes): releases.yml's latest
 #   - on demand, with any tags
 # A combination that passes can be added to releases.yml as a release.
 #
@@ -36,15 +37,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Compose files and manifests parse
+      # The full set of checks (assertions, ShellCheck, the Helm value sets, secret hygiene) is
+      # validate.yml; this is the gate in front of the smoke test: does the stack render at all.
+      - name: Compose files and the chart render
         run: |
           cp .env.example .env
           for k in JWT_SECRET CUBE_API_SECRET POSTGRES_PASSWORD REDIS_PASSWORD; do sed -i "s|^$k=.*|$k=x|" .env; done
           docker compose -f compose.yaml config -q
           docker compose -f compose.single.yaml config -q
           docker compose -f compose.yaml -f compose.build.yaml config -q
-          cp deploy/kubernetes/secrets.env.example deploy/kubernetes/secrets.env
-          kubectl kustomize deploy/kubernetes >/dev/null
+          docker compose -f compose.single.yaml -f compose.single.build.yaml config -q
+          helm template dbt-portal deploy/helm/dbt-portal -f deploy/helm/dbt-portal/values-dev.yaml \
+            $(bash scripts/release-tags.sh --format helm-set) >/dev/null
           python3 -c "import yaml; r=yaml.safe_load(open('releases.yml')); assert r['latest'] in r['releases']"
           bash -n deploy/client/setup.sh
 

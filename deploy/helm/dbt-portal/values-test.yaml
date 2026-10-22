@@ -1,0 +1,64 @@
+# TEST environment: a shared cluster whose PostgreSQL, Redis and secrets come from the environment.
+#
+#   scripts/portal.sh helm-template --values deploy/helm/dbt-portal/values-test.yaml
+#   scripts/portal.sh helm-install  --values deploy/helm/dbt-portal/values-test.yaml
+#
+# Before installing, create the Secret (names only here, values never in git):
+#   kubectl -n dbt-portal create secret generic dbt-portal-secrets \
+#     --from-literal=JWT_SECRET=...          --from-literal=CUBE_API_SECRET=... \
+#     --from-literal=PORTAL_SECRET_KEY=...   --from-literal=DATABASE_URL=postgresql+psycopg2://... \
+#     --from-literal=REDIS_URL=redis://:...@host:6379/0
+# (or have External Secrets / Sealed Secrets create it). Key list: docs/KUBERNETES.md.
+#
+# Image tags: scripts/portal.sh adds the latest release's. For a test run of one build, pin it:
+#   backend:  {image: {tag: test-<commit-sha>}}
+#   frontend: {image: {tag: test-<commit-sha>}}
+#   cube:     {image: {tag: test-<commit-sha>}}
+
+secrets:
+  create: false
+  existingSecret: dbt-portal-secrets
+
+postgresql:
+  enabled: false
+redis:
+  enabled: false
+
+config:
+  environment: production
+  dbtTarget: test
+  dbtDepsOnStart: true
+
+# Clone the project from Git (url and token are yours; the token is the Secret key DBT_PROJECT_GIT_TOKEN).
+project:
+  source: volume
+  # source: git
+  # git: {url: https://github.com/<org>/<repo>.git, ref: test}
+
+# A ReadWriteMany class when pods spread over several nodes (Azure Files, EFS, Filestore, NFS).
+# Leave storageClass empty to use the cluster default.
+workspace:
+  persistence:
+    accessModes: [ReadWriteMany]
+    storageClass: ""
+    size: 5Gi
+data:
+  persistence:
+    storageClass: ""
+backups:
+  persistence:
+    storageClass: ""
+
+persistence:
+  retainOnUninstall: true
+
+frontend:
+  replicaCount: 1
+
+# Publish the frontend through your ingress controller (nothing is set by default):
+# ingress:
+#   enabled: true
+#   className: <your ingress class>
+#   hosts: [{host: <test hostname>}]
+#   tls: [{secretName: <tls secret>, hosts: [<test hostname>]}]
+#   annotations: {}     # e.g. a 3600 s proxy-read-timeout for the job-log WebSocket

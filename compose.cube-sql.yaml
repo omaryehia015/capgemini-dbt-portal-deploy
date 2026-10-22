@@ -1,0 +1,21 @@
+# Publish Cube's SQL API (Postgres protocol) for BI tools, notebooks and AI
+# agents. Optional overlay for either stack. The full stack (compose.yaml)
+# already publishes it on this machine only; this file is how the single-node
+# stack (compose.single.yaml) gets it, and how to move it to another bind
+# address or port:
+#
+#   ./scripts/portal.sh --single --cube-sql up
+#   docker compose -f compose.single.yaml -f compose.cube-sql.yaml up -d
+#
+# CUBE_SQL_BIND  address on the host (default 127.0.0.1: this machine only; 0.0.0.0
+#                every interface, then restrict the port with the host firewall)
+# CUBE_SQL_PORT  host port (default 15432)
+#
+# There is no shared password: every person makes a login on the portal's
+# Semantic Layer page and Cube asks the backend to check it on each connection.
+# The channel is plain Postgres protocol, so put it behind a VPN or a TLS
+# tunnel before opening it beyond this machine.
+services:
+  cube:
+    ports:
+      - "${CUBE_SQL_BIND:-127.0.0.1}:${CUBE_SQL_PORT:-15432}:15432"

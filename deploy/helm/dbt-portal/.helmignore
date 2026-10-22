@@ -1,0 +1,16 @@
+# Patterns to ignore when building the chart package.
+.DS_Store
+.git/
+.gitignore
+.vscode/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Values used only by CI to render every template branch.
+ci/
+# Local values: may hold secrets or cluster details; never packaged.
+*.local.yaml
+*.secret.yaml
+secrets*.yaml

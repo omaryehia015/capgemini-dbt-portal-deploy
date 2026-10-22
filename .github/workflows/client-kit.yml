@@ -7,9 +7,14 @@
 #     postgres/upgrade.sh
 #     setup.sh  setup.ps1  manage.sh  manage.ps1  lib.sh  lib.ps1
 #     install.sh  install.ps1  portal.answers.example  README.md
+#     portal.sh  release-tags.sh                       (Kubernetes: Helm commands, release tags)
+#     deploy/helm/dbt-portal/                          (the Helm chart of the release)
+#   Built by scripts/build-kit.sh. The kit has no build overlay: images are always pulled.
 #
 # Attached to a GitHub release named portal-<release> in this repo, with the
-# Windows installer (Install-DbtPortal.cmd: double-click, a window does the rest).
+# Windows launcher (Install-DbtPortal.cmd: double-click, a window does the rest).
+# The Helm chart is also pushed to GHCR as an OCI artifact (oci://ghcr.io/<owner>/charts/dbt-portal,
+# version = the release's name), the `chart` job below.
 name: Client Kit
 
 on:
@@ -46,18 +51,9 @@ jobs:
           assert name in r['releases'], f'{name} is not in releases.yml'
           print(name)")
           kit="dbt-portal-client-kit-$release"
-          mkdir -p "$kit/postgres"
-          cp compose.yaml compose.single.yaml .env.example releases.yml "$kit/"
-          cp postgres/upgrade.sh "$kit/postgres/"
-          for f in setup.sh setup.ps1 manage.sh manage.ps1 lib.sh lib.ps1 install.sh install.ps1                    portal.answers.example README.md; do
-            cp "deploy/client/$f" "$kit/"
-          done
-          chmod +x "$kit"/*.sh
-          # The kit's .env.example starts on this release's images.
-          read -r backend frontend cube < <(python3 -c "
-          import yaml; x = yaml.safe_load(open('releases.yml'))['releases']['$release']
-          print(x['backend'], x['frontend'], x['cube'])")
-          sed -i "s/^BACKEND_TAG=.*/BACKEND_TAG=$backend/; s/^FRONTEND_TAG=.*/FRONTEND_TAG=$frontend/; s/^CUBE_TAG=.*/CUBE_TAG=$cube/" "$kit/.env.example"
+          # What goes in the kit (compose files, scripts, the Helm chart, this release's tags) is
+          # scripts/build-kit.sh, which scripts/validate.sh also builds and checks.
+          bash scripts/build-kit.sh "$release" .
           zip -qr "$kit.zip" "$kit"
           echo "release=$release" >> "$GITHUB_OUTPUT"
           echo "zip=$kit.zip" >> "$GITHUB_OUTPUT"
@@ -77,32 +73,32 @@ jobs:
             gh release create "$tag" "$ZIP" deploy/client/download/Install-DbtPortal.cmd --title "Portal $RELEASE" --notes "$notes"
           fi
 
-  # DbtPortalSetup.exe: the Windows app clients download. Published only when a
-  # code-signing certificate is configured: managed Windows machines block and
-  # remove an unsigned .exe that starts PowerShell. Secrets: CODESIGN_PFX_BASE64
-  # (the .pfx, base64) and CODESIGN_PASSWORD.
-  app:
+  # The Helm chart as an OCI artifact, next to the kit, so a cluster can install it without the zip:
+  #   helm install portal oci://ghcr.io/<owner>/charts/dbt-portal --version <release> -f my-values.yaml
+  # The chart version is the release's name (so --version <release> finds it); appVersion is too, as in the kit.
+  # The package is private like the images until its visibility is changed in the GitHub package
+  # settings; clients sign in with the same token they pull the images with.
+  chart:
     needs: kit
-    runs-on: windows-2022
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
-      - name: Build, sign and attach the app
-        shell: powershell
+      - name: Package and push the chart
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ needs.kit.outputs.release }}
-          PFX: ${{ secrets.CODESIGN_PFX_BASE64 }}
-          PFX_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if (-not $env:PFX) {
-            Write-Host "::notice::No code-signing certificate configured: DbtPortalSetup.exe is not published (clients use Install-DbtPortal.cmd)."
-            exit 0
-          }
-          .\deploy\client\installer\build.ps1 -Out out
-          $pfx = Join-Path $env:RUNNER_TEMP "codesign.pfx"
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX))
-          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
-          & $signtool.FullName sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f $pfx /p $env:PFX_PASSWORD out\DbtPortalSetup.exe
-          if ($LASTEXITCODE -ne 0) { throw "signing failed" }
-          Remove-Item $pfx
-          gh release upload "portal-$env:RELEASE" out\DbtPortalSetup.exe --clobber
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          mkdir -p "$RUNNER_TEMP/chart"
+          helm package deploy/helm/dbt-portal --version "$RELEASE" --app-version "$RELEASE" --destination "$RUNNER_TEMP/chart"
+          printf '%s' "$GH_TOKEN" | helm registry login ghcr.io --username "$GH_ACTOR" --password-stdin
+          helm push "$RUNNER_TEMP/chart/dbt-portal-$RELEASE.tgz" "oci://ghcr.io/$owner/charts"
+          # Read it back from the registry: what a client will get.
+          helm show chart "oci://ghcr.io/$owner/charts/dbt-portal" --version "$RELEASE" | tee "$RUNNER_TEMP/shown.yaml"
+          grep -q "^version: $RELEASE$" "$RUNNER_TEMP/shown.yaml"
+          echo "Chart: \`oci://ghcr.io/$owner/charts/dbt-portal\` version \`$RELEASE\`" >> "$GITHUB_STEP_SUMMARY"

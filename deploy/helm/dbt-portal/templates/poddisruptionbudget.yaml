@@ -1,0 +1,25 @@
+{{- /*
+Only for the stateless components, and only when they run more than one replica: a budget on a
+single replica would block every node drain. The backend (one replica, Recreate) and the
+workers (jobs finish on SIGTERM) are not covered.
+*/ -}}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- range $component := list "frontend" "cube" }}
+{{- $v := index $.Values $component }}
+{{- if gt (int $v.replicaCount) 1 }}
+{{- $ctx := dict "root" $ "component" $component }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "dbt-portal.componentName" $ctx }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $ctx | nindent 6 }}
+---
+{{- end }}
+{{- end }}
+{{- end }}

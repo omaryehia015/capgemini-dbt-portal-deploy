@@ -179,18 +179,32 @@ sequenceDiagram
 
 ### What the platform team does
 
-Nothing, in the standard install: the cube image listens on 15432
-(`CUBEJS_PG_SQL_PORT`) and `compose.yaml` publishes it as `CUBE_SQL_PORT`
-(default 15432). Optional settings in `.env`:
+On the machine that runs the portal, nothing: the cube image listens on 15432
+(`CUBEJS_PG_SQL_PORT`) and the full stack (`compose.yaml`) publishes it as
+`CUBE_SQL_PORT` (default 15432) **on `127.0.0.1` only**. BI tools on other
+machines need it opened up. Settings in `.env`:
 
 ```bash
+CUBE_SQL_BIND=0.0.0.0        # the host address it is published on (default 127.0.0.1: this machine only)
 CUBE_SQL_PORT=15432          # the host port BI tools use
 CUBE_SQL_HOST=bi.example.com # when BI tools reach the host under another name
 ```
 
-Kubernetes: the cube Service has a `sql` port (15432) inside the cluster. For
-tools outside the cluster, expose it with an internal load balancer and set
-`CUBE_SQL_HOST` / `CUBE_SQL_PORT` on the backend to that address.
+> Earlier `compose.yaml` files published the port on every interface. After an
+> upgrade, BI tools on other machines stop connecting until `CUBE_SQL_BIND=0.0.0.0`
+> is set (and the port is restricted by a firewall or VPN, see below).
+
+The single-node stack publishes nothing but the portal; add the overlay to get
+it: `scripts/portal.sh --single --cube-sql up`
+(`docker compose -f compose.single.yaml -f compose.cube-sql.yaml up -d`).
+
+Kubernetes: the chart keeps the SQL port out of the cube Service
+(`cube.service.sql.enabled: false`). Enabling it adds a `sql` port (15432) to the
+cluster-internal Service. For tools outside the cluster, expose that Service
+yourself with an internal load balancer (a separate, deliberate decision; the
+chart never does) and set `CUBE_SQL_HOST` / `CUBE_SQL_PORT` on the backend
+(`config.extra`) to that address. With `networkPolicy.enabled`, list who may
+reach it in `networkPolicy.cubeSqlFrom`.
 
 Security notes:
 

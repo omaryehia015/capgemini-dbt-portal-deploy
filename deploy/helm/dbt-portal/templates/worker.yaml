@@ -1,0 +1,82 @@
+{{- $component := "worker" }}
+{{- $name := include "dbt-portal.componentName" (dict "root" . "component" $component) }}
+{{- $ctx := dict "root" . "component" $component }}
+{{- $v := .Values.worker }}
+{{- /* The same image as the backend: one image, two start commands. */ -}}
+{{- $image := .Values.backend.image }}
+# The workers run the dbt jobs the backend queues in Redis. No Service: nothing connects to a worker.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ $v.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dbt-portal.labels" $ctx | nindent 8 }}
+        {{- with $v.podLabels }}
+        {{- include "dbt-portal.stringMap" . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with $v.podAnnotations }}
+        {{- include "dbt-portal.stringMap" . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "dbt-portal.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- include "dbt-portal.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml $v.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $v.terminationGracePeriodSeconds }}
+      containers:
+        - name: {{ $component }}
+          image: {{ include "dbt-portal.image" (dict "root" . "image" $image) | quote }}
+          imagePullPolicy: {{ include "dbt-portal.pullPolicy" (dict "root" . "image" $image) }}
+          # The image's entrypoint still runs (project setup); only its command changes.
+          args: ["python", "-m", "app.worker"]
+          securityContext:
+            {{- toYaml $v.securityContext | nindent 12 }}
+          envFrom:
+            {{- include "dbt-portal.envFrom" . | nindent 12 }}
+          env:
+            # The backend clones the project; the workers only mount it.
+            - name: DBT_PROJECT_GIT_URL
+              value: ""
+            - name: WORKER_CONCURRENCY
+              value: {{ $v.concurrency | toString | quote }}
+            {{- include "dbt-portal.sharedEnv" . | nindent 12 }}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            # The same workspace volume as the backend: where dbt runs and writes target/, logs/, dbt_packages/.
+            - name: workspace
+              mountPath: /workspace
+            {{- if $v.mountData }}
+            # The backend's data folder, as the Compose worker has it (worker.mountData).
+            - name: data
+              mountPath: /data
+            {{- end }}
+            {{- include "dbt-portal.profilesMount" . | nindent 12 }}
+          {{- include "dbt-portal.probe" (dict "name" "startupProbe" "probe" $v.probes.startup "handler" (dict "exec" (dict "command" (list "python" "-m" "app.worker" "--check")))) | nindent 10 }}
+          {{- include "dbt-portal.probe" (dict "name" "livenessProbe" "probe" $v.probes.liveness "handler" (dict "exec" (dict "command" (list "python" "-m" "app.worker" "--check")))) | nindent 10 }}
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ include "dbt-portal.claimName" (dict "root" . "component" "workspace" "persistence" .Values.workspace.persistence) }}
+        {{- if $v.mountData }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "dbt-portal.claimName" (dict "root" . "component" "data" "persistence" .Values.data.persistence) }}
+        {{- end }}
+        {{- include "dbt-portal.profilesVolume" . | nindent 8 }}
+      {{- include "dbt-portal.scheduling" $v | nindent 6 }}

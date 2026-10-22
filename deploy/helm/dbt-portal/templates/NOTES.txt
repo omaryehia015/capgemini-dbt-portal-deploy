@@ -1,0 +1,57 @@
+The dbt Portal "{{ .Release.Name }}" is installed in namespace "{{ .Release.Namespace }}" (chart {{ .Chart.Name }}-{{ .Chart.Version }}, portal release {{ .Chart.AppVersion }}).
+
+Images
+  backend  {{ include "dbt-portal.image" (dict "root" . "image" .Values.backend.image) }}  (API and workers)
+  frontend {{ include "dbt-portal.image" (dict "root" . "image" .Values.frontend.image) }}
+  cube     {{ include "dbt-portal.image" (dict "root" . "image" .Values.cube.image) }}
+
+Reach the portal
+{{- if .Values.ingress.enabled }}
+  The Ingress routes to the frontend only:
+{{- if .Values.ingress.hosts }}
+{{- range .Values.ingress.hosts }}
+    {{ if $.Values.ingress.tls }}https{{ else }}http{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+    every host name of the ingress controller (no host is configured)
+{{- end }}
+{{- else }}
+  No Ingress is configured (ingress.enabled=false): nothing is published outside the cluster.
+  Try it with a port-forward:
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "dbt-portal.componentName" (dict "root" . "component" "frontend") }} 8080:{{ .Values.frontend.service.port }}
+  then open http://localhost:8080
+{{- end }}
+
+First sign-in: the backend prints the generated passwords of the seeded accounts once, in its log:
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "dbt-portal.componentName" (dict "root" . "component" "backend") }} | grep -A6 "GENERATED INITIAL CREDENTIALS"
+
+Check it
+  kubectl -n {{ .Release.Namespace }} get pods
+  The backend starts slowly the first time (it clones the project and runs migrations): its startup probe allows {{ mul (int .Values.backend.probes.startup.periodSeconds) (int .Values.backend.probes.startup.failureThreshold) }} seconds.
+
+{{- if or .Values.postgresql.enabled .Values.redis.enabled }}
+
+WARNING: bundled {{ if .Values.postgresql.enabled }}PostgreSQL{{ end }}{{ if and .Values.postgresql.enabled .Values.redis.enabled }} and {{ end }}{{ if .Values.redis.enabled }}Redis{{ end }} (single pod, single disk, not highly available).
+  They are for development and basic testing. Production uses managed services: set
+  postgresql.enabled=false / redis.enabled=false and put DATABASE_URL / REDIS_URL in the Secret.
+{{- end }}
+{{- if not .Values.secrets.create }}
+
+The Secret "{{ include "dbt-portal.secretName" . }}" is yours to manage. It must contain: JWT_SECRET, CUBE_API_SECRET, PORTAL_SECRET_KEY{{ if .Values.postgresql.enabled }}, POSTGRES_PASSWORD{{ else }}, DATABASE_URL{{ end }}{{ if .Values.redis.enabled }}, REDIS_PASSWORD{{ else }}, REDIS_URL{{ end }}.
+{{- else }}
+
+The chart created the Secret "{{ include "dbt-portal.secretName" . }}" (secrets.create=true). That is for development: in production, manage the Secret yourself (secrets.create=false, secrets.existingSecret).
+{{- end }}
+{{- if and (has "ReadWriteMany" .Values.workspace.persistence.accessModes) (not .Values.workspace.persistence.existingClaim) }}
+
+The workspace volume is requested as ReadWriteMany so the backend and the workers can run on different nodes.
+Your storage class must support it (Azure Files, EFS, Filestore, NFS...): kubectl -n {{ .Release.Namespace }} get pvc
+{{- else if not (has "ReadWriteMany" .Values.workspace.persistence.accessModes) }}
+
+The workspace volume is not ReadWriteMany: the backend and the workers must all run on one node.
+{{- end }}
+{{- if .Values.persistence.retainOnUninstall }}
+
+The persistent volume claims{{ if .Values.secrets.create }} and the Secret{{ end }} are kept when you uninstall (persistence.retainOnUninstall=true).
+  Delete them yourself when the data is no longer wanted: kubectl -n {{ .Release.Namespace }} delete pvc -l app.kubernetes.io/instance={{ .Release.Name }}
+{{- end }}

@@ -1,0 +1,17 @@
+{{- /*
+Claims for the dbt workspace (shared by backend and workers), the backend's data and the
+backups. A claim named in existingClaim is used as it is and not created. Nothing here is
+created for a workload that does not need storage.
+*/ -}}
+{{- if not .Values.workspace.persistence.existingClaim }}
+{{ include "dbt-portal.pvc" (dict "root" . "component" "workspace" "persistence" .Values.workspace.persistence) }}
+---
+{{- end }}
+{{- if not .Values.data.persistence.existingClaim }}
+{{ include "dbt-portal.pvc" (dict "root" . "component" "data" "persistence" .Values.data.persistence) }}
+---
+{{- end }}
+{{- if and .Values.backups.persistence.enabled (not .Values.backups.persistence.existingClaim) }}
+{{ include "dbt-portal.pvc" (dict "root" . "component" "backups" "persistence" .Values.backups.persistence) }}
+---
+{{- end }}

@@ -1,8 +1,25 @@
+# Local configuration and secrets: never committed. .env.example is the template.
 .env
-.env.bak
+.env.*
+!.env.example
+*.env.local
 
-# Written by deploy/client/setup.* (profiles.yml mount for this machine)
+# Written by scripts/portal.sh and deploy/client/setup.* (profiles.yml mount, an
+# external workspace volume, a project path with spaces: all specific to this machine)
 compose.override.yaml
+
+# The portal's backups when PORTAL_BACKUP_DIR points at ./backups
+/backups/
+
+# Helm: values with secrets or cluster details stay local; rendered manifests
+# (helm template output) can contain Secret data and are never committed.
+deploy/helm/**/*.local.yaml
+deploy/helm/**/*.secret.yaml
+deploy/helm/**/secrets*.yaml
+!deploy/helm/**/templates/secret*.yaml
+*.rendered.yaml
+/rendered/
+/.helm-out/
 
 # e2e
 node_modules/
@@ -14,8 +31,3 @@ test-results/
 .DS_Store
 *.log
 
-# Deploy secrets
-deploy/kubernetes/secrets.env
-
-# Built by deploy/client/installer/build.ps1; released signed by client-kit.yml
-deploy/client/download/*.exe

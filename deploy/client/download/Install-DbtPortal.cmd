@@ -16,7 +16,7 @@ exit /b
 # setup.ps1 in the background with progress, opens the portal and adds a
 # desktop shortcut.
 #
-# Source of DbtPortalSetup.exe and Install-DbtPortal.cmd: build.ps1 wraps it.
+# Double-click launcher for Windows: it is this whole file, run by PowerShell.
 # A copy can carry the token (the line below); otherwise it is pasted in.
 # ------------------------------------------------------------------------------
 $PrefilledToken = '__PORTAL_TOKEN__'

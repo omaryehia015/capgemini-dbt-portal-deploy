@@ -24,8 +24,26 @@ jobs:
           case "$BASE:$HEAD" in
             dev:feature/*|dev:feat/*|dev:bugfix/*|dev:fix/*|dev:hotfix/*|dev:chore/*|dev:dependabot/*|dev:renovate/*|dev:release/*) ;;
             test:dev|main:test) ;;
+            # Image records opened by record-image.yml go straight to the environment's own branch
+            # (dev, test, main for prod). The next step makes sure they change nothing else.
+            dev:images/dev-*|test:images/test-*|main:images/prod-*) ;;
             *) echo "::error::Invalid promotion $HEAD -> $BASE. Required path: working branch -> dev -> test -> main"; exit 1 ;;
           esac
+      - name: Image record pull requests change only their record file
+        if: startsWith(github.head_ref, 'images/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.base_ref }}
+          PR: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$BASE" in dev) allowed=images/dev.yaml ;; test) allowed=images/test.yaml ;; main) allowed=images/prod.yaml ;; esac
+          files="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename')"
+          [[ -n "$files" ]] || { echo "::error::The pull request changes no file."; exit 1; }
+          while IFS= read -r f; do
+            [[ "$f" == "$allowed" ]] || { echo "::error::An image record pull request into $BASE may change only $allowed, but it changes $f."; exit 1; }
+          done <<< "$files"
   secret-scan:
     runs-on: ubuntu-24.04
     steps:
@@ -38,4 +56,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - run: shellcheck -x -S warning deploy/client/setup.sh deploy/client/manage.sh deploy/client/install.sh deploy/client/lib.sh
+      - run: |
+          shellcheck -x -S warning deploy/client/setup.sh deploy/client/manage.sh deploy/client/install.sh deploy/client/lib.sh \
+            scripts/portal.sh scripts/release-tags.sh scripts/validate.sh scripts/build-kit.sh scripts/sync-release.sh scripts/add-release.sh postgres/upgrade.sh

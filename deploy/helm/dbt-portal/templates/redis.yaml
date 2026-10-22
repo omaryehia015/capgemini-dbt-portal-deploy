@@ -1,0 +1,133 @@
+{{- if .Values.redis.enabled }}
+{{- $component := "redis" }}
+{{- $name := include "dbt-portal.componentName" (dict "root" . "component" $component) }}
+{{- $ctx := dict "root" . "component" $component }}
+{{- $v := .Values.redis }}
+# Bundled Redis for DEVELOPMENT and basic testing: one pod, password-protected, not highly available.
+# Production uses a managed Redis (redis.enabled=false, REDIS_URL in the Secret).
+{{- if $v.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+  {{- if .Values.persistence.retainOnUninstall }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml $v.persistence.accessModes | nindent 4 }}
+  {{- if $v.persistence.storageClass }}
+  storageClassName: {{ if eq $v.persistence.storageClass "-" }}""{{ else }}{{ $v.persistence.storageClass | quote }}{{ end }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $v.persistence.size | quote }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dbt-portal.labels" $ctx | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "dbt-portal.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- include "dbt-portal.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml $v.podSecurityContext | nindent 8 }}
+      containers:
+        - name: redis
+          image: {{ printf "%s:%s" $v.image.repository $v.image.tag | quote }}
+          imagePullPolicy: {{ default .Values.imagePullPolicy $v.image.pullPolicy }}
+          # Job requests carry a one-off provisioning login for a few milliseconds: Redis is private
+          # (ClusterIP, password). $(REDIS_PASSWORD) is expanded by Kubernetes from the env below.
+          args:
+            - redis-server
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            - --save
+            - ""
+            - --appendonly
+            - {{ ternary "yes" "no" $v.persistence.enabled | quote }}
+          securityContext:
+            {{- toYaml $v.securityContext | nindent 12 }}
+          ports:
+            - name: redis
+              containerPort: 6379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dbt-portal.secretName" . }}
+                  key: REDIS_PASSWORD
+            # redis-cli reads its password from here, so the probes never put it on a command line.
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dbt-portal.secretName" . }}
+                  key: REDIS_PASSWORD
+          {{- if $v.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 5
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+      {{- if $v.persistence.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}
+      {{- end }}
+      {{- include "dbt-portal.scheduling" $v | nindent 6 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+spec:
+  # ClusterIP only: Redis is reachable from inside the cluster, never from outside.
+  type: ClusterIP
+  selector:
+    {{- include "dbt-portal.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+{{- end }}

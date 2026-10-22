@@ -87,7 +87,7 @@ error at start when the backend speaks another.
 and service volumes): compose's one-off `upgrade` service
 ([postgres/upgrade.sh](../postgres/upgrade.sh)) moves the data into the one
 database and volume before the backend first starts, and leaves the old ones
-as a backup. On Kubernetes, see [ONBOARDING.md](ONBOARDING.md).
+as a backup. On Kubernetes, see [KUBERNETES.md](KUBERNETES.md).
 
 ## Environments (Dev, UAT, Prod...)
 
@@ -123,9 +123,12 @@ flowchart LR
 
 ## Versions and compatibility
 
-Each repo releases on its own (`vX.Y.Z` tag → images `X.Y.Z`, `X.Y`,
-`latest`). The deploy repo's `releases.yml` lists the combinations that
-passed the end-to-end smoke test together; deployments pin one of them.
+Each repo publishes its own images: a push to `dev`, `test` or `main` pushes
+`dev-<commit sha>`, `test-<commit sha>` or `prod-<commit sha>` to
+`ghcr.io/omaryehia015/capgemini-dbt-portal-<name>`, and the deploy repo records
+the newest image of each component per environment in `images/<env>.yaml`.
+Its `releases.yml` lists the combinations that passed the end-to-end smoke
+test together; deployments pin one of them.
 Two contracts keep independently released pieces honest:
 
 - **Frontend ↔ backend: the public API.** The backend commits its OpenAPI

@@ -1,0 +1,95 @@
+{{- if .Values.legacyMigration.enabled }}
+{{- $component := "legacy-migration" }}
+{{- $name := include "dbt-portal.componentName" (dict "root" . "component" $component) }}
+{{- $ctx := dict "root" . "component" $component }}
+{{- $v := .Values.legacyMigration }}
+{{- $bundled := .Values.postgresql.enabled }}
+{{- $host := ternary (include "dbt-portal.componentName" (dict "root" . "component" "postgres")) $v.database.host $bundled }}
+{{- if not $host }}
+{{- fail "legacyMigration.enabled needs legacyMigration.database.host when postgresql.enabled is false: the database that still holds portal_identity and portal_execution" }}
+{{- end }}
+{{- if and (not $bundled) (not $v.passwordSecret.name) }}
+{{- fail "legacyMigration.enabled with an external database needs legacyMigration.passwordSecret.name: a Secret that exists already, because this hook runs before the chart's own Secret is created" }}
+{{- end }}
+{{- if and $bundled (ne .Values.postgresql.auth.database "portal") }}
+{{- fail "legacyMigration moves the old databases into one named 'portal': set postgresql.auth.database=portal" }}
+{{- end }}
+{{- /*
+The migration of the pre-2026.11 layout (two databases, portal_identity and portal_execution, into
+one, portal) that postgres/upgrade.sh does for Compose, run once before the release is installed
+or upgraded. The script is the same file (files/upgrade.sh: scripts/validate.sh fails if the two
+differ) and is safe to run again: on a new install, or once moved, it does nothing. The old
+databases are kept. Only the database is moved: Compose's volume copy is not part of this.
+Bundled PostgreSQL: runs on `helm upgrade` only (there is no database before the first install).
+*/ -}}
+{{- $hooks := ternary "pre-upgrade" "pre-install,pre-upgrade" $bundled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+  annotations:
+    "helm.sh/hook": {{ $hooks }}
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+data:
+  upgrade.sh: |
+    {{- .Files.Get "files/upgrade.sh" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+  annotations:
+    "helm.sh/hook": {{ $hooks }}
+    "helm.sh/hook-weight": "0"
+    # A failed Job is kept, so its log can be read (kubectl logs job/{{ $name }}).
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $v.backoffLimit }}
+  activeDeadlineSeconds: {{ $v.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "dbt-portal.labels" $ctx | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      # No API access: this pod only talks to the database. It also runs before the chart's own
+      # ServiceAccount exists on a first install.
+      automountServiceAccountToken: false
+      {{- include "dbt-portal.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml $v.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ printf "%s:%s" $v.image.repository $v.image.tag | quote }}
+          imagePullPolicy: {{ default .Values.imagePullPolicy $v.image.pullPolicy }}
+          command: ["sh", "/scripts/upgrade.sh"]
+          securityContext:
+            {{- toYaml $v.securityContext | nindent 12 }}
+          env:
+            - name: PGHOST
+              value: {{ $host | quote }}
+            - name: PGPORT
+              value: {{ $v.database.port | toString | quote }}
+            - name: PGUSER
+              value: {{ default .Values.postgresql.auth.username $v.database.user | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ ternary (include "dbt-portal.secretName" .) $v.passwordSecret.name (empty $v.passwordSecret.name) }}
+                  key: {{ $v.passwordSecret.key | quote }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ $name }}
+{{- end }}

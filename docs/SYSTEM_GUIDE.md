@@ -69,7 +69,7 @@ flowchart TB
     FE["capgemini-dbt-portal-frontend<br/>React SPA + nginx gateway<br/>image: -frontend"]
     CU["capgemini-dbt-portal-cube<br/>Cube semantic engine<br/>image: -cube"]
   end
-  DEP["capgemini-dbt-portal-deploy<br/>compose · Kubernetes · client kit<br/>releases.yml · e2e smoke test"]
+  DEP["capgemini-dbt-portal-deploy<br/>compose · Helm chart · client kit<br/>releases.yml · e2e smoke test"]
 
   FE -- "public API (openapi.json → schema.gen.ts)" --> BE
   CU -- "/internal/cube contract" --> BE
@@ -87,7 +87,7 @@ flowchart TB
 | `capgemini-dbt-portal-deploy` (this repo) | [ARCHITECTURE.md](ARCHITECTURE.md), [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md), [ONBOARDING.md](ONBOARDING.md) |
 
 The repos only work together when checked out **side by side** in one
-folder (`../<repo>` paths in `compose.build.yaml`, `run-local.ps1` and the
+folder (`../<repo>` paths in `compose.build.yaml` and the
 frontend's `npm run gen:api`). The team workspace's `tools/ws.py clone` does
 that.
 
@@ -126,7 +126,7 @@ flowchart LR
   CU -->|"semantic queries"| DWH
 ```
 
-Only the frontend port is published. The backups folder is a plain folder on
+Only the frontend port is published (plus Cube's SQL port on `127.0.0.1`: [DEPLOYMENT.md](DEPLOYMENT.md)). The backups folder is a plain folder on
 the host, outside the volumes, so deleting the containers or the volumes leaves
 it (deploy docs/ONBOARDING.md, section 9, *Backups*). The single-node variant
 (`compose.single.yaml`) drops Redis, PostgreSQL and the worker: the backend
@@ -189,7 +189,7 @@ flowchart TD
     I1["Windows: Install-DbtPortal.cmd<br/>(client kit installer)"]
     I2["curl … install.sh | bash<br/>or setup.sh / setup.ps1"]
     I3["python portal.py onboard<br/>(from capgemini_dbt_core)"]
-    I4["kubectl apply -k deploy/kubernetes"]
+    I4["helm install dbt-portal deploy/helm/dbt-portal"]
   end
   install --> SA["Setup Assistant (Admin)<br/>workspace · warehouse login · dbt project<br/>(Git, local folder or image) · packages · modules · team"]
   SA --> OB["Onboarding page (5 steps, each a dbt job)"]
@@ -250,7 +250,7 @@ flowchart LR
   BE -- "5 · client install contract<br/>/api/auth, /api/onboarding, /api/jobs,<br/>env vars, credentials banner" --> CORE
   CORE -- "6 · metadata_package_schemas" --> BE
   CORE -- "7 · versions.yml ↔ elementary-data pin" --> BE
-  BE & FE & CU -- "8 · vX.Y.Z tags" --> DEP["deploy releases.yml"]
+  BE & FE & CU -- "8 · image tags<br/>(dev/test/prod-sha)" --> DEP["deploy releases.yml"]
 ```
 
 | # | Contract | Producer | Consumer | Guarded by |
@@ -262,7 +262,7 @@ flowchart LR
 | 5 | Client install | backend auth/onboarding/jobs, env vars, log banner | core `scripts/portal.py` | `pytest/test_portal_script.py` |
 | 6 | Package schemas | core `metadata_package_schemas` | backend onboarding | shared var, read at run time |
 | 7 | Versions | core `versions.yml` | backend `requirements.txt` | review |
-| 8 | Releases | each repo's tags | deploy `releases.yml` | e2e smoke test |
+| 8 | Releases | each repo's image tags (`<env>-<sha>`) | deploy `releases.yml` | e2e smoke test |
 
 When a change spans repos, merge **producer first**: core → backend → cube
 → frontend → deploy.
@@ -276,12 +276,12 @@ flowchart LR
     DEV -->|"PR"| TEST["test"]
     TEST -->|"PR"| MAIN["main"]
     DEV & TEST & MAIN -->|"publish.yml"| IMG["ghcr image &lt;env&gt;-&lt;sha&gt;"]
-    MAIN -->|"tag vX.Y.Z"| REL["images X.Y.Z, X.Y, latest"]
   end
-  REL -->|"repository_dispatch"| E2E["deploy: e2e-smoke.yml<br/>new version + releases.yml latest of the others"]
+  IMG -->|"image-published (record-image.yml)"| REC["deploy: PR into images/&lt;env&gt;.yaml"]
+  IMG -->|"candidate tags"| E2E["deploy: e2e-smoke.yml<br/>candidate + releases.yml latest of the others"]
   E2E -->|"passes"| RY["PR: add entry to releases.yml"]
-  RY -->|"merge to main"| KIT["client-kit.yml<br/>zip + Windows installer<br/>GitHub release portal-&lt;release&gt;"]
-  KIT --> CL["clients: setup.sh --release,<br/>manage.sh upgrade, portal.py --release"]
+  RY -->|"merge to main"| KIT["client-kit.yml<br/>zip + Windows launcher<br/>GitHub release portal-&lt;release&gt;"]
+  KIT --> CL["clients: install.sh (local, server, service, kubernetes),<br/>setup.sh --release, manage.sh upgrade, portal.py --release"]
 ```
 
 The core package promotes `dev → uat → main` and is consumed by clients
@@ -298,7 +298,7 @@ journey
   title Getting productive
   section Day 1
     Clone the workspace (tools/ws.py clone): 5
-    Run the stack (run-local.ps1), sign in as admin: 4
+    Run the stack (portal.sh --build up), sign in as admin: 4
     Read this guide and ARCHITECTURE.md: 4
   section Day 2
     Backend guide: architecture and flows: 3
@@ -316,5 +316,5 @@ Commands you will use every day (from the workspace folder):
 ```bash
 python tools/ws.py status                 # branch and dirty files of every repo
 python tools/ws.py check backend frontend # each repo's CI checks, locally
-cd capgemini-dbt-portal-deploy && ./run-local.ps1   # whole stack at http://localhost:8090
+cd capgemini-dbt-portal-deploy && bash scripts/portal.sh --build up   # whole stack at http://localhost:8080
 ```

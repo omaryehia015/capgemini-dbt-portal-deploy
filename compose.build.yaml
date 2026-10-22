@@ -1,25 +1,41 @@
 # Build the images from the sibling repos instead of pulling them, for
-# developing across repos:
+# developing across repos. Layered on the FULL stack (compose.yaml):
 #
-#   docker compose -f compose.yaml -f compose.build.yaml up --build -d
+#   ./scripts/portal.sh --build up
+#   docker compose -f compose.yaml -f compose.build.yaml up --build -d   # the same, by hand
+#
+# For the single-node stack use compose.single.build.yaml
+# (./scripts/portal.sh --single --build up picks it).
 #
 # Expects the repos checked out next to this one:
 #   ../capgemini-dbt-portal-backend  ../capgemini-dbt-portal-frontend  ../capgemini-dbt-portal-cube
+# Elsewhere: BACKEND_SRC, FRONTEND_SRC, CUBE_SRC in .env (paths relative to this folder, or absolute).
+#
+# The backend image is built once and used by both the API and the worker (the
+# worker has no build: section, so it only reuses the image the backend built).
+# Build arguments are the ones each Dockerfile declares: APP_VERSION (shown in
+# the UI and /api/version) for all three, EXTRA_PIP_PACKAGES for the backend.
 services:
   backend:
     image: capgemini-dbt-portal-backend:source
     build:
-      context: ../capgemini-dbt-portal-backend
-      args: { APP_VERSION: local, EXTRA_PIP_PACKAGES: "${EXTRA_PIP_PACKAGES:-}" }
+      context: ${BACKEND_SRC:-../capgemini-dbt-portal-backend}
+      args:
+        APP_VERSION: ${PORTAL_BUILD_VERSION:-local}
+        EXTRA_PIP_PACKAGES: "${EXTRA_PIP_PACKAGES:-}"
   worker:
     image: capgemini-dbt-portal-backend:source
+    # Built by `backend` above, never pulled: there is no such image in a registry.
+    pull_policy: never
   cube:
     image: capgemini-dbt-portal-cube:source
     build:
-      context: ../capgemini-dbt-portal-cube
-      args: { APP_VERSION: local }
+      context: ${CUBE_SRC:-../capgemini-dbt-portal-cube}
+      args:
+        APP_VERSION: ${PORTAL_BUILD_VERSION:-local}
   frontend:
     image: capgemini-dbt-portal-frontend:source
     build:
-      context: ../capgemini-dbt-portal-frontend
-      args: { APP_VERSION: local }
+      context: ${FRONTEND_SRC:-../capgemini-dbt-portal-frontend}
+      args:
+        APP_VERSION: ${PORTAL_BUILD_VERSION:-local}

@@ -1,0 +1,148 @@
+# The chart on a real (throwaway) Kubernetes cluster: the same Playwright smoke test as e2e-smoke.yml
+# (sign in, run dbt debug, see it in the run history), against the published images installed by the
+# client's own command, scripts/portal.sh helm-install. This is validation, not deployment: a kind
+# cluster is created inside the job and thrown away with it; nothing is installed anywhere else.
+#
+# Runs on:
+#   - a pull request that changes the chart, the scripts that drive it, releases.yml or the test
+#   - on demand, with any tags (default: releases.yml's latest)
+#
+# Pulling the private images needs GHCR_READ_TOKEN (a token with read:packages), unless the packages
+# grant this repo read access (as in e2e-smoke.yml). The token becomes the cluster's pull Secret.
+name: Kubernetes Smoke
+
+on:
+  pull_request:
+    branches: [dev, test, main]
+    paths:
+      - deploy/helm/**
+      - scripts/portal.sh
+      - scripts/release-tags.sh
+      - postgres/upgrade.sh
+      - releases.yml
+      - e2e/**
+      - .github/workflows/kubernetes-smoke.yml
+  workflow_dispatch:
+    inputs:
+      backend_tag: { description: "backend tag (default: releases.yml latest)", required: false, type: string }
+      frontend_tag: { description: "frontend tag", required: false, type: string }
+      cube_tag: { description: "cube tag", required: false, type: string }
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: k8s-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      NAMESPACE: dbt-portal
+      RELEASE_NAME: dbt-portal
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Pick versions
+        env:
+          IN_BACKEND: ${{ inputs.backend_tag }}
+          IN_FRONTEND: ${{ inputs.frontend_tag }}
+          IN_CUBE: ${{ inputs.cube_tag }}
+        run: |
+          set -euo pipefail
+          # Only a tag typed by hand overrides the release; the chart gets the rest from releases.yml.
+          sets=()
+          for pair in "backend:$IN_BACKEND" "frontend:$IN_FRONTEND" "cube:$IN_CUBE"; do
+            component="${pair%%:*}"; tag="${pair#*:}"
+            [[ -n "$tag" ]] || continue
+            [[ "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ && "$tag" != latest ]] || { echo "::error::$component tag '$tag' is not a pinned image tag"; exit 1; }
+            sets+=(--set "$component.image.tag=$tag")
+          done
+          echo "SET_ARGS=${sets[*]:-}" >> "$GITHUB_ENV"
+          bash scripts/release-tags.sh --format env | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Create a throwaway kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: portal-smoke
+
+      # The chart as a client installs it: scripts/portal.sh helm-install makes the pull Secret from
+      # the token (sent to kubectl on stdin only), resolves the tags from releases.yml and waits until
+      # every Deployment is ready. development mode gives the documented seed passwords the test uses.
+      - name: Install the chart
+        env:
+          PORTAL_TOKEN: ${{ secrets.GHCR_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          PORTAL_USER_NAME: ${{ github.actor }}
+          PORTAL_HELM_TIMEOUT: 15m
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          # shellcheck disable=SC2086
+          bash scripts/portal.sh --yes helm-install --name "$RELEASE_NAME" --namespace "$NAMESPACE" --pull-secret \
+            --values deploy/helm/dbt-portal/values-dev.yaml \
+            --set "imageRegistry=ghcr.io/$owner" \
+            --set config.environment=development \
+            $SET_ARGS
+
+      - name: Explain a denied pull
+        if: failure()
+        run: |
+          if kubectl -n "$NAMESPACE" get events 2>/dev/null | grep -qiE 'denied|unauthorized|ErrImagePull'; then
+            echo "::error::The cluster could not pull the images. Add a GHCR_READ_TOKEN secret to this repo (classic token with read:packages), or add this repo under Manage Actions access in each capgemini-dbt-portal-* package's settings."
+          fi
+
+      # A minimal dbt project in the workspace volume, so the Runner has something to run.
+      - name: Put a sample dbt project in the workspace
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" exec "deploy/$RELEASE_NAME-backend" -- sh -c '
+            mkdir -p /workspace/models &&
+            printf "name: smoke\nversion: \"1.0.0\"\nprofile: smoke\n" > /workspace/dbt_project.yml &&
+            printf "select 1 as id\n" > /workspace/models/one.sql'
+
+      - name: Reach the portal
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE_NAME-frontend" 8080:8080 >"$RUNNER_TEMP/port-forward.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -fsS http://localhost:8080/api/version && exit 0
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/port-forward.log"
+          exit 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Run smoke test
+        working-directory: e2e
+        env:
+          PORTAL_URL: http://localhost:8080
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npx playwright test
+
+      - name: Cluster state and logs
+        if: failure()
+        run: |
+          kubectl -n "$NAMESPACE" get pods,svc,pvc,events -o wide || true
+          kubectl -n "$NAMESPACE" describe pods || true
+          for d in backend worker frontend cube; do
+            echo "::group::logs $d"
+            kubectl -n "$NAMESPACE" logs "deploy/$RELEASE_NAME-$d" --tail=200 || true
+            echo "::endgroup::"
+          done
+
+      - uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: playwright-report-kubernetes
+          path: e2e/playwright-report
+          retention-days: 7

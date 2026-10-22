@@ -1,0 +1,107 @@
+# Opens a pull request that adds a portal release to releases.yml, makes it the latest, and updates
+# what repeats the latest release (.env.example's image tags, the chart's appVersion).
+#
+#   Actions > New Release > Run workflow
+#
+# By default the three image tags are the newest prod images the component pipelines recorded in
+# images/prod.yaml (see record-image.yml); type a tag to pin one yourself (Cube, for example, if its
+# prod image is not recorded yet). The pull request goes into `dev` from the branch release/<name>,
+# the promotion path pre-check.yml accepts, and its e2e-smoke run starts a real stack from exactly the
+# tags of the new entry: merge it only when that passes. Nothing is merged here.
+#
+# Secret (repository): IMAGE_PR_TOKEN, as for record-image.yml, so the checks run on the pull request.
+name: New Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: "Release name, year.month.number (e.g. 2026.11.0)"
+        required: true
+        type: string
+      notes:
+        description: "What changed, and which components must be upgraded together (optional)"
+        required: false
+        type: string
+      backend_tag:
+        description: "Backend image tag (blank: the newest recorded in images/prod.yaml)"
+        required: false
+        type: string
+      frontend_tag:
+        description: "Frontend image tag (blank: the newest recorded in images/prod.yaml)"
+        required: false
+        type: string
+      cube_tag:
+        description: "Cube image tag (blank: the newest recorded in images/prod.yaml)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: new-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # The tooling and the prod image records come from the default branch; releases.yml is edited
+      # on `dev`, where the change then travels dev -> test -> main like any other.
+      - uses: actions/checkout@v6
+        with:
+          path: tools
+      - uses: actions/checkout@v6
+        with:
+          ref: dev
+          path: repo
+          token: ${{ secrets.IMAGE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Add the release
+        env:
+          NAME: ${{ inputs.name }}
+          NOTES: ${{ inputs.notes }}
+          BACKEND_TAG: ${{ inputs.backend_tag }}
+          FRONTEND_TAG: ${{ inputs.frontend_tag }}
+          CUBE_TAG: ${{ inputs.cube_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--root repo --name "$NAME" --from-images "tools/images/prod.yaml")
+          [[ -z "$NOTES" ]] || args+=(--notes "$NOTES")
+          [[ -z "$BACKEND_TAG" ]] || args+=(--backend "$BACKEND_TAG")
+          [[ -z "$FRONTEND_TAG" ]] || args+=(--frontend "$FRONTEND_TAG")
+          [[ -z "$CUBE_TAG" ]] || args+=(--cube "$CUBE_TAG")
+          bash tools/scripts/add-release.sh "${args[@]}" | tee "$RUNNER_TEMP/add-release.txt"
+
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ secrets.IMAGE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          NAME: ${{ inputs.name }}
+        shell: bash
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          branch="release/$NAME"
+          git config user.name "dbt-portal release helper"
+          git config user.email "dbt-portal-release-helper@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add releases.yml .env.example deploy/helm/dbt-portal/Chart.yaml
+          git commit -m "release $NAME"
+          git push origin "$branch"
+          {
+            echo "Adds portal release **$NAME** and makes it the latest."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/add-release.txt"
+            echo '```'
+            echo
+            echo "Updates \`releases.yml\`, \`.env.example\` (image tags) and the chart's \`appVersion\` together."
+            echo "The e2e-smoke run on this pull request starts a real stack from exactly these tags: merge only when it passes."
+            echo "Merging to \`main\` builds the client kit."
+          } > "$RUNNER_TEMP/pr-body.md"
+          url="$(gh pr create --base dev --head "$branch" --title "release $NAME" --body-file "$RUNNER_TEMP/pr-body.md")"
+          echo "Opened $url" | tee -a "$GITHUB_STEP_SUMMARY"

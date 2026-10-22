@@ -1,0 +1,63 @@
+# CI only (not an example to install): turns on every optional feature, so the validation renders
+# and checks each template branch. Every credential-looking value is an obvious dummy.
+imagePullSecrets: [{name: ci-registry-pull}]
+serviceAccount:
+  annotations: {example.invalid/role: ci}
+project:
+  source: git
+  git: {url: "https://git.example.invalid/org/repo.git", ref: main, username: oauth2}
+  subdir: transform/dbt
+  profiles: {existingSecret: ci-dbt-profiles}
+config:
+  dbtTarget: ci
+  dbtDepsOnStart: true
+  extra: {AIRFLOW_URL: "http://airflow.example.invalid:8080", FEATURE_FLAG: true, RETRIES: 3}
+secrets:
+  create: true
+  values: {DBT_PROJECT_GIT_TOKEN: ci-not-a-token, ANTHROPIC_API_KEY: ci-not-a-key}
+postgresql:
+  enabled: true
+  persistence: {storageClass: ci-fast, size: 10Gi}
+redis:
+  enabled: true
+  persistence: {enabled: true, storageClass: "-", size: 2Gi}
+workspace:
+  persistence: {storageClass: ci-rwx, annotations: {example.invalid/owner: ci}}
+data:
+  persistence: {existingClaim: ci-existing-data}
+backups:
+  persistence: {enabled: false}
+backend:
+  forwardedHops: 2
+  podAnnotations: {example.invalid/count: 7}
+  podLabels: {team: data}
+  extraEnv: [{name: EXTRA_SETTING, value: "1"}]
+  nodeSelector: {disk: ssd}
+  tolerations: [{key: dedicated, operator: Exists}]
+  priorityClassName: ci-high
+worker:
+  replicaCount: 3
+  concurrency: 8
+  extraEnv: [{name: EXTRA_WORKER_SETTING, value: "1"}]
+frontend:
+  replicaCount: 3
+  service: {annotations: {example.invalid/note: x}}
+  airflowUpstream: airflow-web.example.invalid:8080
+cube:
+  replicaCount: 2
+  service: {sql: {enabled: true}}
+ingress:
+  enabled: true
+  className: ci-class
+  annotations: {example.invalid/proxy-read-timeout: 3600}
+  hosts:
+    - host: portal.example.invalid
+      paths: [{path: /, pathType: Prefix}]
+    - host: alt.example.invalid
+  tls: [{secretName: ci-tls, hosts: [portal.example.invalid]}]
+networkPolicy:
+  enabled: true
+  frontendFrom: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ci-ingress}}}]
+  backendFrom: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ci-monitoring}}}]
+  cubeSqlFrom: [{ipBlock: {cidr: 10.0.0.0/8}}]
+podDisruptionBudget: {enabled: true}

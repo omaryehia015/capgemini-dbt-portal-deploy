@@ -1,0 +1,35 @@
+# Build the images from the sibling repos instead of pulling them, layered on
+# the SINGLE-node stack (compose.single.yaml):
+#
+#   ./scripts/portal.sh --single --build up
+#   docker compose -f compose.single.yaml -f compose.single.build.yaml up --build -d
+#
+# Same sources, arguments and overrides as compose.build.yaml (BACKEND_SRC,
+# FRONTEND_SRC, CUBE_SRC, PORTAL_BUILD_VERSION, EXTRA_PIP_PACKAGES). It is a
+# separate file because the single-node stack has no `worker` service, and an
+# overlay that names one would create it.
+#
+# `backup-folder` runs the backend image too: it reuses the one `backend` builds.
+services:
+  backup-folder:
+    image: capgemini-dbt-portal-backend:source
+    pull_policy: never
+  backend:
+    image: capgemini-dbt-portal-backend:source
+    build:
+      context: ${BACKEND_SRC:-../capgemini-dbt-portal-backend}
+      args:
+        APP_VERSION: ${PORTAL_BUILD_VERSION:-local}
+        EXTRA_PIP_PACKAGES: "${EXTRA_PIP_PACKAGES:-}"
+  cube:
+    image: capgemini-dbt-portal-cube:source
+    build:
+      context: ${CUBE_SRC:-../capgemini-dbt-portal-cube}
+      args:
+        APP_VERSION: ${PORTAL_BUILD_VERSION:-local}
+  frontend:
+    image: capgemini-dbt-portal-frontend:source
+    build:
+      context: ${FRONTEND_SRC:-../capgemini-dbt-portal-frontend}
+      args:
+        APP_VERSION: ${PORTAL_BUILD_VERSION:-local}

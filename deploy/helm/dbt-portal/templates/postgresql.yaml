@@ -1,0 +1,108 @@
+{{- if .Values.postgresql.enabled }}
+{{- $component := "postgres" }}
+{{- $name := include "dbt-portal.componentName" (dict "root" . "component" $component) }}
+{{- $ctx := dict "root" . "component" $component }}
+{{- $v := .Values.postgresql }}
+# Bundled PostgreSQL for DEVELOPMENT and basic testing: one pod, one disk, not highly available.
+# Production uses a managed database (postgresql.enabled=false, DATABASE_URL in the Secret).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dbt-portal.labels" $ctx | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "dbt-portal.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- include "dbt-portal.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml $v.podSecurityContext | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ printf "%s:%s" $v.image.repository $v.image.tag | quote }}
+          imagePullPolicy: {{ default .Values.imagePullPolicy $v.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $v.securityContext | nindent 12 }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: {{ $v.auth.username | quote }}
+            - name: POSTGRES_DB
+              value: {{ $v.auth.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dbt-portal.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            # A sub-directory: the volume root holds lost+found on some storage classes.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ $v.auth.username | quote }}, "-d", {{ $v.auth.database | quote }}]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ $v.auth.username | quote }}, "-d", {{ $v.auth.database | quote }}]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ $v.auth.username | quote }}, "-d", {{ $v.auth.database | quote }}]
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+      {{- include "dbt-portal.scheduling" $v | nindent 6 }}
+  # The data is always on a volume. Claims made from this template are not deleted with the
+  # StatefulSet or the release: delete them yourself when the data is no longer wanted.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "dbt-portal.selectorLabels" $ctx | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml $v.persistence.accessModes | nindent 10 }}
+        {{- if $v.persistence.storageClass }}
+        storageClassName: {{ if eq $v.persistence.storageClass "-" }}""{{ else }}{{ $v.persistence.storageClass | quote }}{{ end }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $v.persistence.size | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+spec:
+  # ClusterIP only: PostgreSQL is reachable from inside the cluster, never from outside.
+  type: ClusterIP
+  selector:
+    {{- include "dbt-portal.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+{{- end }}

@@ -1,0 +1,5 @@
+# Images published for the prod environment: the newest one of each component.
+# Written by .github/workflows/record-image.yml from the component pipelines' image-published
+# event, one pull request per environment and component. Do not edit by hand.
+environment: prod
+images: {}

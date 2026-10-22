@@ -1,10 +1,32 @@
-# Single node: the backend also runs dbt itself, SQLite, no Redis, no workers.
-# For a laptop, a demo or a small team; it does not scale out. The full
-# stack (compose.yaml, backend + workers) is the default for anything shared.
+# Single node: one backend container does everything, plus Cube and the gateway.
 #
-#   docker compose -f compose.single.yaml up -d
+#   backend   the portal API AND the dbt runs (EXECUTION_ROLE=all), SQLite on a volume
+#   cube      the semantic layer engine, configured by the backend over HTTP
+#   frontend  the SPA and the gateway: the only published port, on this machine only
 #
-# Same images as compose.yaml.
+# No PostgreSQL, no Redis, no separate worker. Meant for a laptop, a demo or a
+# local trial: it does not scale out and keeps everything in one container, so a
+# long dbt run and the API share one process. Anything shared (a team, a server,
+# production) runs the full stack, compose.yaml.
+#
+#   ./scripts/portal.sh init
+#   ./scripts/portal.sh --single up           # docker or podman, auto-detected
+#   docker compose -f compose.single.yaml up -d      # the same, by hand (needs .env)
+#   -> http://localhost:8080
+#
+# Reads .env for CUBE_API_SECRET (required) and the project source
+# (DBT_PROJECT_PATH, or DBT_PROJECT_GIT_URL with an empty DBT_PROJECT_PATH). The
+# database and queue settings below are fixed here: a DATABASE_URL or REDIS_URL
+# left over in .env from the full stack cannot switch this mode.
+#
+# Same images as compose.yaml. Build from the sibling repos with
+# compose.single.build.yaml. Settings: docs/DEPLOYMENT.md.
+x-hardened: &hardened
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 services:
   # One-off: hands the backup folder (PORTAL_BACKUP_DIR, a host folder; unset: a
   # volume of its own) to the backend's user.
@@ -12,6 +34,8 @@ services:
     image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-backend:${BACKEND_TAG:-latest}
     restart: "no"
     user: "0:0"
+    security_opt:
+      - no-new-privileges:true
     entrypoint: ["sh", "-c", "chown \"$$PORTAL_USER\" /backups 2>/dev/null || true"]
     environment:
       PORTAL_USER: ${PORTAL_USER:-10001:10001}
@@ -19,15 +43,28 @@ services:
       - ${PORTAL_BACKUP_DIR:-backups}:/backups
 
   backend:
+    <<: *hardened
     image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-backend:${BACKEND_TAG:-latest}
     restart: unless-stopped
     user: "${PORTAL_USER:-10001:10001}"
+    # Only for PORTAL_USER=0:0 (Docker/Podman Desktop bind mounts): root then needs
+    # these to write files it does not own. Ineffective for the default non-root user.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    # Lets a running dbt step finish on `down`/`restart`.
+    stop_grace_period: 120s
     env_file:
-      - path: .env
+      - path: ${PORTAL_ENV_FILE:-.env}
         required: false
     environment:
       DBT_PROJECT_DIR: /workspace
       ENVIRONMENT: ${ENVIRONMENT:-production}
+      # One process runs the API and the jobs; its database is a file on portal_data.
+      EXECUTION_ROLE: all
+      DATABASE_URL: sqlite:////data/portal.db
+      REDIS_URL: ""
       # Unset: generated on first start and kept on the portal_data volume.
       JWT_SECRET: ${JWT_SECRET:-}
       CUBE_API_SECRET: "${CUBE_API_SECRET:?CUBE_API_SECRET is not set - see .env.example}"
@@ -52,28 +89,35 @@ services:
       retries: 3
 
   cube:
+    <<: *hardened
     image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-cube:${CUBE_TAG:-latest}
     restart: unless-stopped
     environment:
       CUBEJS_API_SECRET: ${CUBE_API_SECRET}
       PORTAL_SEMANTIC_URL: http://backend:8000
+    # Internal only. Cube's SQL API (BI tools, agents) is not published here: add
+    # compose.cube-sql.yaml (it binds 127.0.0.1:15432 unless CUBE_SQL_BIND says otherwise).
     expose: ["4000"]
-    # Cube's SQL API (Postgres protocol) for BI tools, notebooks and AI agents.
-    # No shared password: each user makes a login on the Semantic Layer page,
-    # and Cube asks the backend to check it on every connection.
-    ports:
-      - "${CUBE_SQL_PORT:-15432}:15432"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/livez').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
 
   frontend:
+    <<: *hardened
     image: ${IMAGE_REGISTRY:-ghcr.io/omaryehia015}/capgemini-dbt-portal-frontend:${FRONTEND_TAG:-latest}
     restart: unless-stopped
     depends_on:
       backend: { condition: service_healthy }
     ports:
-      - "${PORTAL_PORT:-8080}:8080"
+      # This machine only. PORTAL_BIND=0.0.0.0 shares it on the network (then use the
+      # full stack: this mode is not meant for shared use).
+      - "${PORTAL_BIND:-127.0.0.1}:${PORTAL_PORT:-8080}:8080"
       # AIRFLOW_UI_PORT publishes the Airflow UI proxy; unset, 8082 gets an
-      # unused random host port (nothing listens on it).
-      - "${AIRFLOW_UI_PORT:+${AIRFLOW_UI_PORT}:}8082"
+      # unused random host port on this machine (nothing listens on it).
+      - "${PORTAL_BIND:-127.0.0.1}:${AIRFLOW_UI_PORT:+${AIRFLOW_UI_PORT}}:8082"
     environment:
       BACKEND_UPSTREAM: backend:8000
       AIRFLOW_UPSTREAM: ${AIRFLOW_UPSTREAM:-}

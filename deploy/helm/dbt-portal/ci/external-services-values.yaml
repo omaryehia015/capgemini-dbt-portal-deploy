@@ -1,0 +1,11 @@
+# CI only: external PostgreSQL and Redis, and the chart creating the Secret from supplied
+# connection strings (dummies). Renders the "no bundled data service" branch of secrets.create=true.
+secrets:
+  create: true
+  values:
+    DATABASE_URL: "postgresql+psycopg2://portal:ci-not-a-password@db.example.invalid:5432/portal"
+    REDIS_URL: "redis://:ci-not-a-password@cache.example.invalid:6379/0"
+postgresql:
+  enabled: false
+redis:
+  enabled: false

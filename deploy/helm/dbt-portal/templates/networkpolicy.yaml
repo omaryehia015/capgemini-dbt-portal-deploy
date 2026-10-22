@@ -1,0 +1,148 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /*
+Ingress-side policies only (egress is open: the backend reaches Git, the warehouse and AI
+providers). Needs a CNI that enforces NetworkPolicy; on one that does not, these objects are
+accepted and ignored. A pod selected by a policy accepts only what its policy lists.
+*/ -}}
+{{- $root := . }}
+{{- $frontend := dict "root" . "component" "frontend" }}
+{{- $backend := dict "root" . "component" "backend" }}
+{{- $worker := dict "root" . "component" "worker" }}
+{{- $cube := dict "root" . "component" "cube" }}
+# The frontend: from frontend.from (empty: from anywhere, as an Ingress controller needs).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dbt-portal.componentName" $frontend }}
+  labels:
+    {{- include "dbt-portal.labels" $frontend | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $frontend | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {port: http, protocol: TCP}
+      {{- with .Values.networkPolicy.frontendFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+# The backend: only from the frontend gateway and Cube (and the extra peers you list).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dbt-portal.componentName" $backend }}
+  labels:
+    {{- include "dbt-portal.labels" $backend | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $backend | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {port: http, protocol: TCP}
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "dbt-portal.selectorLabels" $frontend | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "dbt-portal.selectorLabels" $cube | nindent 14 }}
+        {{- with .Values.networkPolicy.backendFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+---
+# The workers take no connections: they pull jobs from Redis.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dbt-portal.componentName" $worker }}
+  labels:
+    {{- include "dbt-portal.labels" $worker | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $worker | nindent 6 }}
+  policyTypes: [Ingress]
+---
+# Cube: its API only from the backend; its SQL port only from the peers you list.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dbt-portal.componentName" $cube }}
+  labels:
+    {{- include "dbt-portal.labels" $cube | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $cube | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {port: http, protocol: TCP}
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "dbt-portal.selectorLabels" $backend | nindent 14 }}
+    {{- if and .Values.cube.service.sql.enabled .Values.networkPolicy.cubeSqlFrom }}
+    - ports:
+        - {port: sql, protocol: TCP}
+      from:
+        {{- toYaml .Values.networkPolicy.cubeSqlFrom | nindent 8 }}
+    {{- end }}
+{{- if .Values.postgresql.enabled }}
+{{- $postgres := dict "root" . "component" "postgres" }}
+---
+# Bundled PostgreSQL: only from the backend and the workers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dbt-portal.componentName" $postgres }}
+  labels:
+    {{- include "dbt-portal.labels" $postgres | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $postgres | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {port: postgres, protocol: TCP}
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "dbt-portal.selectorLabels" $backend | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "dbt-portal.selectorLabels" $worker | nindent 14 }}
+{{- end }}
+{{- if .Values.redis.enabled }}
+{{- $redis := dict "root" . "component" "redis" }}
+---
+# Bundled Redis: only from the backend and the workers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dbt-portal.componentName" $redis }}
+  labels:
+    {{- include "dbt-portal.labels" $redis | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $redis | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - {port: redis, protocol: TCP}
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "dbt-portal.selectorLabels" $backend | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "dbt-portal.selectorLabels" $worker | nindent 14 }}
+{{- end }}
+{{- end }}

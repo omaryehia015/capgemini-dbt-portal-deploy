@@ -1,7 +1,10 @@
 # One-line install on Windows: downloads the client kit of a portal release and
-# runs its setup.ps1.
+# runs its setup.ps1. Docker Desktop or Podman, Compose; the images are PULLED, nothing is built.
 #
 #   irm https://raw.githubusercontent.com/omaryehia015/capgemini-dbt-portal-deploy/main/deploy/client/install.ps1 | iex
+#
+# This is the "local" mode (this computer). A Linux server (Compose or a systemd service) and
+# Kubernetes (Helm) are installed with install.sh: on Windows, from WSL or a Linux host.
 #
 # Environment (set before running):
 #   $env:PORTAL_TOKEN     the access token you were sent (signs in to the private images)
@@ -12,6 +15,9 @@
 #
 # The kit itself is public: the token is only needed for the images.
 $ErrorActionPreference = "Stop"
+if ($env:PORTAL_MODE -and $env:PORTAL_MODE -ne "local") {
+    throw "PORTAL_MODE=$($env:PORTAL_MODE) is not available on Windows: this installer runs the portal on this computer (Docker Desktop or Podman). For a Linux server or Kubernetes use install.sh, from WSL or a Linux host."
+}
 $repo = "omaryehia015/capgemini-dbt-portal-deploy"
 $release = if ($env:PORTAL_RELEASE) { $env:PORTAL_RELEASE } else { "latest" }
 $dir = if ($env:PORTAL_DIR) { $env:PORTAL_DIR } else { Join-Path $HOME "dbt-portal" }

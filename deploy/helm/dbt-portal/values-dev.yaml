@@ -1,0 +1,55 @@
+# DEVELOPMENT / TRIAL install. Not for production and not for shared data.
+#
+#   scripts/portal.sh helm-install --values deploy/helm/dbt-portal/values-dev.yaml
+#   (or: helm install dbt-portal deploy/helm/dbt-portal -n dbt-portal --create-namespace \
+#          -f deploy/helm/dbt-portal/values-dev.yaml -f <tags from scripts/release-tags.sh --format helm-values>)
+#
+# What this turns on:
+#   - bundled PostgreSQL and Redis (one pod each, one disk each: not highly available)
+#   - the chart creates the Secret; JWT_SECRET, CUBE_API_SECRET, PORTAL_SECRET_KEY and the
+#     two passwords are generated once and kept across upgrades. Anything else
+#     (DBT_PROJECT_GIT_TOKEN, a warehouse login...) goes in secrets.values, from a
+#     file that is NOT committed:  -f my-dev-secrets.local.yaml
+#   - one replica of everything, small volumes, ReadWriteOnce workspace (one-node cluster:
+#     kind, minikube, k3d, Docker Desktop) and no leftovers after `helm uninstall`
+#
+# Image tags are not here: scripts/portal.sh adds the latest release's, or pin your own:
+#   backend:  {image: {tag: dev-<commit-sha>}}
+#   frontend: {image: {tag: dev-<commit-sha>}}
+#   cube:     {image: {tag: dev-<commit-sha>}}
+
+secrets:
+  create: true
+  # values:
+  #   DBT_PROJECT_GIT_TOKEN: ...       # in a *.local.yaml file, never here
+
+postgresql:
+  enabled: true
+  persistence:
+    size: 2Gi
+redis:
+  enabled: true
+
+# The project: connect it in the portal's Setup Assistant (volume), or clone it at start:
+project:
+  source: volume
+  # source: git
+  # git: {url: https://github.com/<org>/<repo>.git, ref: main}
+
+workspace:
+  persistence:
+    # One node: ReadWriteOnce is enough, and works with the default class of a local cluster.
+    accessModes: [ReadWriteOnce]
+    size: 2Gi
+data:
+  persistence:
+    size: 1Gi
+backups:
+  persistence:
+    size: 2Gi
+
+persistence:
+  retainOnUninstall: false
+
+frontend:
+  replicaCount: 1

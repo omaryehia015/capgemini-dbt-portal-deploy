@@ -41,8 +41,11 @@ install_hint() {
 }
 
 # Sets C (the compose command as an array) and E (docker or podman) for the caller.
+# Docker first, then Podman; PORTAL_ENGINE=docker|podman limits it to one (the systemd
+# unit of `manage.sh service install` sets it, so a reboot picks the engine it was installed for).
 # shellcheck disable=SC2034
 find_runtime() {
+    local want="${PORTAL_ENGINE:-}"
     # Inside the Podman machine the setup window put docker compose in ~/.local/bin:
     # use it as podman's compose provider, so manage.sh works there as well.
     if [[ -z "${PODMAN_COMPOSE_PROVIDER:-}" && -x "$HOME/.local/bin/docker-compose" ]] && command -v podman >/dev/null 2>&1; then
@@ -50,8 +53,8 @@ find_runtime() {
         local sock; sock="/run/user/$(id -u)/podman/podman.sock"
         [[ -n "${DOCKER_HOST:-}" || ! -S "$sock" ]] || export DOCKER_HOST="unix://$sock"
     fi
-    if docker compose version >/dev/null 2>&1 && docker info >/dev/null 2>&1; then C=(docker compose); E=docker
-    elif podman info >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then C=(podman compose); E=podman
+    if [[ "$want" != podman ]] && docker compose version >/dev/null 2>&1 && docker info >/dev/null 2>&1; then C=(docker compose); E=docker
+    elif [[ "$want" != docker ]] && podman info >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then C=(podman compose); E=podman
     else return 1; fi
 }
 

@@ -1,0 +1,17 @@
+# CI only: an external database that still holds the pre-2026.11 databases, migrated by the hook Job.
+secrets:
+  create: true
+  values:
+    DATABASE_URL: "postgresql+psycopg2://portal:ci-not-a-password@db.example.invalid:5432/portal"
+    REDIS_URL: "redis://:ci-not-a-password@cache.example.invalid:6379/0"
+postgresql:
+  enabled: false
+redis:
+  enabled: false
+legacyMigration:
+  enabled: true
+  database:
+    host: db.example.invalid
+    user: portal
+  passwordSecret:
+    name: legacy-db-password

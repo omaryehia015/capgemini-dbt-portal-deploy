@@ -1,0 +1,75 @@
+# Validates the deployment assets of this repo: Compose files, the Helm chart, the scripts,
+# releases.yml and the secret hygiene. It renders and asserts; it never deploys and needs no
+# cluster or credentials. The stack itself is smoke-tested by e2e-smoke.yml; secrets in the
+# history are scanned by pre-check.yml (Gitleaks).
+#
+# Everything here is one script, scripts/validate.sh, so the same checks run on a laptop:
+#   scripts/validate.sh [yaml|shell|compose|helm|releases|secrets|stale]
+# Each check ends PASSED, FAILED or NOT RUN (a tool is missing); a FAILED fails the job.
+name: Validate Deployment
+
+on:
+  pull_request:
+    branches: [dev, test, main]
+  push:
+    branches: [dev, test, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: YAML, shell, releases, secrets, Kustomize leftovers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Tools this job relies on
+        run: |
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
+          shellcheck --version | sed -n 2p
+          git --version
+      - name: Validate
+        run: bash scripts/validate.sh yaml shell releases secrets stale images
+
+  compose:
+    name: Docker Compose full, single, source-build (rendered, not run)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Tools this job relies on
+        run: |
+          python3 -c 'import yaml'
+          docker compose version
+      - name: Validate
+        run: bash scripts/validate.sh compose
+
+  helm:
+    name: Helm lint, render, assertions, kubeconform, client kit
+    runs-on: ubuntu-24.04
+    env:
+      KUBECONFORM_VERSION: v0.7.0
+      KUBECONFORM_SHA256: c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3
+      # Schema checks, not cluster tests: no Kubernetes version is claimed supported until it is run.
+      KUBE_VERSIONS: "1.28.0 1.31.0 1.33.0"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install kubeconform (checksum pinned)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o kubeconform.tar.gz "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo install -m 0755 kubeconform /usr/local/bin/kubeconform
+          rm -f kubeconform kubeconform.tar.gz
+      - name: Tools this job relies on
+        run: |
+          python3 -c 'import yaml'
+          helm version --short
+          kubeconform -v
+      - name: Validate
+        run: bash scripts/validate.sh helm kit

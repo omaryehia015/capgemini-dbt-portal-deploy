@@ -1,0 +1,170 @@
+# Records the image a component pipeline just published, in images/<environment>.yaml, through a
+# pull request to the branch of that environment: dev -> dev, test -> test, prod -> main.
+#
+# Started by the backend, frontend and cube pipelines (their "Record the image in the deploy repo" job
+# sends a repository_dispatch event "image-published" after the image is pushed to GHCR). Also by hand
+# (Actions > Record Image > Run workflow) to record an image whose event was missed.
+#
+#   payload (client_payload): component, environment, image, tag, commit, repository, run_url,
+#                             published_at, actor
+#
+# One pull request per environment and component (branch images/<environment>-<component>): a newer
+# image of the same component updates that pull request instead of opening another. Nothing is merged
+# here: the pull request goes through the normal review.
+#
+# Secrets (repository, this repo):
+#   IMAGE_PR_TOKEN  a fine-grained token for THIS repo: Contents read/write and Pull requests read/write.
+#                   Needed so the checks (pre-check, validate, e2e-smoke) run on the pull request:
+#                   pull requests opened with the built-in GITHUB_TOKEN start no workflows. Without it
+#                   this workflow falls back to GITHUB_TOKEN (and says so), and the repository setting
+#                   "Allow GitHub Actions to create and approve pull requests" must be on.
+name: Record Image
+
+on:
+  repository_dispatch:
+    types: [image-published]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment of the image
+        required: true
+        type: choice
+        options: [dev, test, prod]
+      component:
+        description: Which image
+        required: true
+        type: choice
+        options: [backend, frontend, cube]
+      commit:
+        description: The component commit the image was built from (its tag is <environment>-<commit>)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# One run at a time per environment: two events for the same file never race.
+concurrency:
+  group: record-image-${{ github.event.client_payload.environment || inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # The event is data from another repository: it reaches the shell only through environment
+      # variables, is checked here, and is checked again, field by field, by record_image.py.
+      - name: Read the event
+        id: event
+        env:
+          P_ENVIRONMENT: ${{ github.event.client_payload.environment || inputs.environment }}
+          P_COMPONENT: ${{ github.event.client_payload.component || inputs.component }}
+          P_COMMIT: ${{ github.event.client_payload.commit || inputs.commit }}
+          P_TAG: ${{ github.event.client_payload.tag || format('{0}-{1}', inputs.environment, inputs.commit) }}
+          P_IMAGE: ${{ github.event.client_payload.image }}
+          P_RUN_URL: ${{ github.event.client_payload.run_url }}
+          P_PUBLISHED: ${{ github.event.client_payload.published_at }}
+          P_ACTOR: ${{ github.event.client_payload.actor }}
+          HAVE_PR_TOKEN: ${{ secrets.IMAGE_PR_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$P_ENVIRONMENT" =~ ^(dev|test|prod)$ ]] || { echo "::error::environment '$P_ENVIRONMENT' is not dev, test or prod"; exit 1; }
+          [[ "$P_COMPONENT" =~ ^(backend|frontend|cube)$ ]] || { echo "::error::component '$P_COMPONENT' is not backend, frontend or cube"; exit 1; }
+          [[ "$P_COMMIT" =~ ^[a-f0-9]{7,40}$ ]] || { echo "::error::commit is not 7 to 40 hex characters"; exit 1; }
+          [[ "$P_TAG" == "$P_ENVIRONMENT-$P_COMMIT" ]] || { echo "::error::tag '$P_TAG' is not '$P_ENVIRONMENT-<commit>'"; exit 1; }
+          case "$P_ENVIRONMENT" in dev) base=dev ;; test) base=test ;; prod) base=main ;; esac
+          {
+            echo "environment=$P_ENVIRONMENT"
+            echo "component=$P_COMPONENT"
+            echo "base=$base"
+            echo "branch=images/$P_ENVIRONMENT-$P_COMPONENT"
+          } >> "$GITHUB_OUTPUT"
+          if [[ "$HAVE_PR_TOKEN" != true ]]; then
+            echo "::notice::IMAGE_PR_TOKEN is not set: the pull request is opened with GITHUB_TOKEN, so its checks will not start on their own."
+          fi
+
+      # The tooling comes from the default branch (a repository_dispatch workflow runs from it), the
+      # record from the environment's own branch: dev and test may be behind main.
+      - uses: actions/checkout@v6
+        with:
+          path: tools
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.event.outputs.base }}
+          path: repo
+          token: ${{ secrets.IMAGE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Record the image
+        id: record
+        working-directory: repo
+        env:
+          P_ENVIRONMENT: ${{ steps.event.outputs.environment }}
+          P_COMPONENT: ${{ steps.event.outputs.component }}
+          P_COMMIT: ${{ github.event.client_payload.commit || inputs.commit }}
+          P_TAG: ${{ github.event.client_payload.tag || format('{0}-{1}', inputs.environment, inputs.commit) }}
+          P_IMAGE: ${{ github.event.client_payload.image }}
+          P_RUN_URL: ${{ github.event.client_payload.run_url }}
+          P_PUBLISHED: ${{ github.event.client_payload.published_at }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          args=(--file "images/$P_ENVIRONMENT.yaml" --environment "$P_ENVIRONMENT" --component "$P_COMPONENT"
+                --tag "$P_TAG" --commit "$P_COMMIT" --registry "ghcr.io/$owner")
+          [[ -z "$P_IMAGE" ]] || args+=(--image "$P_IMAGE")
+          [[ -z "$P_RUN_URL" ]] || args+=(--run-url "$P_RUN_URL")
+          [[ -z "$P_PUBLISHED" ]] || args+=(--published-at "$P_PUBLISHED")
+          result="$(python3 ../tools/scripts/record_image.py record "${args[@]}")"
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          echo "$P_COMPONENT $P_TAG: $result" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update the pull request
+        if: steps.record.outputs.result == 'recorded'
+        working-directory: repo
+        env:
+          GH_TOKEN: ${{ secrets.IMAGE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          P_ENVIRONMENT: ${{ steps.event.outputs.environment }}
+          P_COMPONENT: ${{ steps.event.outputs.component }}
+          BASE: ${{ steps.event.outputs.base }}
+          BRANCH: ${{ steps.event.outputs.branch }}
+          P_TAG: ${{ github.event.client_payload.tag || format('{0}-{1}', inputs.environment, inputs.commit) }}
+          P_COMMIT: ${{ github.event.client_payload.commit || inputs.commit }}
+          P_RUN_URL: ${{ github.event.client_payload.run_url }}
+          P_SOURCE: ${{ github.event.client_payload.repository }}
+          P_ACTOR: ${{ github.event.client_payload.actor }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="images($P_ENVIRONMENT): $P_COMPONENT $P_TAG"
+          {
+            echo "The $P_COMPONENT pipeline published a new **$P_ENVIRONMENT** image."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| image | \`ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/capgemini-dbt-portal-$P_COMPONENT:$P_TAG\` |"
+            echo "| commit | \`$P_COMMIT\` |"
+            [[ -z "$P_SOURCE" ]] || echo "| repository | \`$P_SOURCE\` |"
+            [[ -z "$P_ACTOR" ]] || echo "| triggered by | \`$P_ACTOR\` |"
+            [[ -z "$P_RUN_URL" ]] || echo "| pipeline run | $P_RUN_URL |"
+            echo
+            echo "Changes only \`images/$P_ENVIRONMENT.yaml\`. Opened by \`record-image.yml\`; a newer $P_COMPONENT image updates this pull request."
+          } > "$RUNNER_TEMP/pr-body.md"
+          git config user.name "dbt-portal image recorder"
+          git config user.email "dbt-portal-image-recorder@users.noreply.github.com"
+          # A rolling branch: always the environment's branch plus this one change.
+          git checkout -B "$BRANCH"
+          git add "images/$P_ENVIRONMENT.yaml"
+          git commit -m "$title"
+          git push --force origin "$BRANCH"
+          existing="$(gh pr list --base "$BASE" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh pr edit "$existing" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+            url="$(gh pr view "$existing" --json url --jq .url)"
+            echo "Updated $url" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            url="$(gh pr create --base "$BASE" --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md")"
+            echo "Opened $url" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,90 @@
+# PRODUCTION: managed PostgreSQL and Redis, a Secret you manage, no secret value in this file.
+#
+#   scripts/portal.sh helm-template --values deploy/helm/dbt-portal/values-prod.yaml --set project.git.url=<repo>
+#   scripts/portal.sh helm-install  --values deploy/helm/dbt-portal/values-prod.yaml --values my-prod.local.yaml
+#
+# This file is a starting point, NOT a statement that the platform is ready: before use, settle
+# what only your environment knows (storage class with ReadWriteMany, ingress class and
+# hostname, TLS certificate, image registry credentials, resource sizing, secret manager,
+# backup policy, supported Kubernetes version). docs/KUBERNETES.md lists them.
+#
+# The Secret "dbt-portal-secrets" must exist in the namespace before the install. It holds:
+#   JWT_SECRET, CUBE_API_SECRET, PORTAL_SECRET_KEY, DATABASE_URL, REDIS_URL
+#   (+ DBT_PROJECT_GIT_TOKEN, warehouse and AI credentials, as needed)
+#
+# Image tags: pin immutable ones in your own values file (never "latest"). scripts/portal.sh
+# adds the latest release's from releases.yml when you give none:
+#   backend:  {image: {tag: prod-<commit-sha>}}
+#   frontend: {image: {tag: prod-<commit-sha>}}
+#   cube:     {image: {tag: prod-<commit-sha>}}
+
+secrets:
+  create: false
+  existingSecret: dbt-portal-secrets
+
+# No bundled data services in production.
+postgresql:
+  enabled: false
+redis:
+  enabled: false
+
+config:
+  environment: production
+  dbtTarget: prod
+  dbtDepsOnStart: true
+
+# The backend clones the project at start. REQUIRED: set project.git.url in your own values
+# (and DBT_PROJECT_GIT_TOKEN in the Secret for a private repository).
+project:
+  source: git
+  git:
+    ref: main
+
+# The workspace is shared by the backend and every worker: ReadWriteMany when they can land on
+# different nodes. Name a class that provides it (storageClass: ""  = the cluster default).
+workspace:
+  persistence:
+    accessModes: [ReadWriteMany]
+    storageClass: ""
+    size: 10Gi
+data:
+  persistence:
+    storageClass: ""
+    size: 2Gi
+# Best on another storage class than the data, or one your cluster backups copy elsewhere.
+backups:
+  persistence:
+    storageClass: ""
+    size: 10Gi
+
+persistence:
+  retainOnUninstall: true
+
+frontend:
+  replicaCount: 2
+worker:
+  replicaCount: 2
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {memory: 6Gi}
+
+podDisruptionBudget:
+  enabled: true
+
+# Ingress-side isolation. Needs a CNI that enforces NetworkPolicy; the frontend accepts
+# traffic from anywhere unless you list the peers (your ingress controller's namespace).
+networkPolicy:
+  enabled: true
+  # frontendFrom:
+  #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: <ingress controller namespace>}}
+
+# Registry credentials for the private images (a kubernetes.io/dockerconfigjson Secret):
+# imagePullSecrets: [{name: ghcr-pull}]
+
+# Publish the frontend. Nothing is set by default: no ingress class and no hostname are assumed.
+# ingress:
+#   enabled: true
+#   className: <your ingress class>
+#   hosts: [{host: <portal hostname>}]
+#   tls: [{secretName: <tls secret>, hosts: [<portal hostname>]}]
+#   annotations: {}     # e.g. a 3600 s proxy-read-timeout for the job-log WebSocket

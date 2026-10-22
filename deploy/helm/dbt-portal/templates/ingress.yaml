@@ -1,0 +1,52 @@
+{{- if .Values.ingress.enabled }}
+{{- $name := include "dbt-portal.fullname" . }}
+{{- $backend := dict "name" (include "dbt-portal.componentName" (dict "root" . "component" "frontend")) "port" .Values.frontend.service.port }}
+# Routes to the frontend gateway ONLY. The gateway proxies /api to the backend; the backend, Cube,
+# PostgreSQL and Redis are never routed to.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" (dict "root" . "component" "ingress") | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- include "dbt-portal.stringMap" . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- if .Values.ingress.hosts }}
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range (default (list (dict "path" "/" "pathType" "Prefix")) .paths) }}
+          - path: {{ .path | default "/" }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ $backend.name }}
+                port:
+                  number: {{ $backend.port }}
+          {{- end }}
+    {{- end }}
+    {{- else }}
+    # No host configured: the rule matches every host name of the controller.
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $backend.name }}
+                port:
+                  number: {{ $backend.port }}
+    {{- end }}
+{{- end }}

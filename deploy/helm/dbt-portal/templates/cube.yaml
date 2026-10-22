@@ -1,0 +1,87 @@
+{{- $component := "cube" }}
+{{- $name := include "dbt-portal.componentName" (dict "root" . "component" $component) }}
+{{- $ctx := dict "root" . "component" $component }}
+{{- $v := .Values.cube }}
+# Cube, the semantic layer engine. Stateless: it reads its warehouse login and data model from
+# the backend (PORTAL_SEMANTIC_URL), so it can be restarted and scaled freely.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ $v.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "dbt-portal.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dbt-portal.labels" $ctx | nindent 8 }}
+        {{- with $v.podLabels }}
+        {{- include "dbt-portal.stringMap" . | nindent 8 }}
+        {{- end }}
+      {{- with $v.podAnnotations }}
+      annotations:
+        {{- include "dbt-portal.stringMap" . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "dbt-portal.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      {{- include "dbt-portal.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml $v.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ $component }}
+          image: {{ include "dbt-portal.image" (dict "root" . "image" $v.image) | quote }}
+          imagePullPolicy: {{ include "dbt-portal.pullPolicy" (dict "root" . "image" $v.image) }}
+          securityContext:
+            {{- toYaml $v.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 4000
+            # The SQL API (BI tools, agents). Declared for reference; it is in the Service only when
+            # cube.service.sql.enabled is true.
+            - name: sql
+              containerPort: 15432
+          env:
+            # Cube verifies the portal's query tokens with this secret and signs its own configuration
+            # requests to the backend with it: the backend gets the same value.
+            - name: CUBEJS_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dbt-portal.secretName" . }}
+                  key: CUBE_API_SECRET
+            - name: PORTAL_SEMANTIC_URL
+              value: {{ printf "http://%s:%v" (include "dbt-portal.componentName" (dict "root" . "component" "backend")) .Values.backend.service.port | quote }}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- include "dbt-portal.probe" (dict "name" "startupProbe" "probe" $v.probes.startup "handler" (dict "httpGet" (dict "path" "/livez" "port" "http"))) | nindent 10 }}
+          {{- include "dbt-portal.probe" (dict "name" "readinessProbe" "probe" $v.probes.readiness "handler" (dict "httpGet" (dict "path" "/readyz" "port" "http"))) | nindent 10 }}
+          {{- include "dbt-portal.probe" (dict "name" "livenessProbe" "probe" $v.probes.liveness "handler" (dict "httpGet" (dict "path" "/livez" "port" "http"))) | nindent 10 }}
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+      {{- include "dbt-portal.scheduling" $v | nindent 6 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "dbt-portal.labels" $ctx | nindent 4 }}
+spec:
+  # ClusterIP only: nothing outside the cluster reaches Cube through this chart.
+  type: {{ $v.service.type }}
+  selector:
+    {{- include "dbt-portal.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ $v.service.port }}
+      targetPort: http
+    {{- if $v.service.sql.enabled }}
+    - name: sql
+      port: {{ $v.service.sql.port }}
+      targetPort: sql
+    {{- end }}

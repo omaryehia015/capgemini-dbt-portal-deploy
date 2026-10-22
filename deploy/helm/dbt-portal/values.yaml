@@ -1,0 +1,473 @@
+# Capgemini dbt Portal - default values.
+#
+# These defaults render a complete, locked-down install that needs only what the chart
+# cannot know: the three image tags and a Secret. Start from one of the example files:
+#
+#   values-dev.yaml    trial / development: bundled PostgreSQL and Redis, the chart creates the Secret
+#   values-test.yaml   shared test: services and Secret supplied by the environment
+#   values-prod.yaml   production: services and Secret supplied, 2 gateway replicas, NetworkPolicy
+#
+# Image tags are required and are not defaulted here on purpose (a default would go stale):
+#   scripts/release-tags.sh --format helm-values > tags.yaml        # from releases.yml
+#   scripts/portal.sh helm-install --values values-prod.yaml ...    # adds them for you
+#
+# Full guide: docs/KUBERNETES.md. Every key is documented where it is defined.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ── Images ──────────────────────────────────────────────────────────────────
+# Registry prefix of the three portal images (not of PostgreSQL and Redis).
+imageRegistry: ghcr.io/omaryehia015
+imagePullPolicy: IfNotPresent
+# Credentials for a private registry, as references to existing Secrets of type
+# kubernetes.io/dockerconfigjson: [{name: ghcr-pull}]. See docs/KUBERNETES.md.
+imagePullSecrets: []
+# The chart refuses the tag "latest" unless this is true (it is not a release).
+allowLatestTag: false
+
+serviceAccount:
+  create: true
+  # Default: the release's full name.
+  name: ""
+  annotations: {}
+  # The portal never calls the Kubernetes API: no token is mounted.
+  automountServiceAccountToken: false
+
+# ── The dbt project ─────────────────────────────────────────────────────────
+project:
+  # git:    the backend clones project.git.url into the workspace volume at start and
+  #         updates it on every restart. The workers only mount the workspace.
+  # volume: the workspace volume is used as it is: filled by the Setup Assistant in the
+  #         portal, or pre-populated (workspace.persistence.existingClaim).
+  # (Kubernetes has no host folder to mount: there is no "local" mode.)
+  source: volume
+  git:
+    url: ""                # https:// or git@... (required when source is git)
+    ref: main
+    # Non-secret. GitHub works with the default (x-access-token); GitLab: oauth2.
+    username: ""
+    # The token is a SECRET: Secret key DBT_PROJECT_GIT_TOKEN.
+  # The dbt project is in a sub-folder of the repo / workspace.
+  subdir: ""
+  # A profiles.yml kept in a Secret instead of committed in the project:
+  #   kubectl create secret generic dbt-profiles --from-file=profiles.yml -n dbt-portal
+  # It is mounted read-only at /etc/dbt and DBT_PROFILES_DIR is set for backend and worker.
+  profiles:
+    existingSecret: ""
+    key: profiles.yml
+
+# ── Non-secret configuration (ConfigMap, backend and worker) ─────────────────
+config:
+  # production: a random password per seeded account, printed once in the backend log.
+  # development: the documented demo passwords - never on a shared cluster.
+  environment: production
+  logFormat: json
+  # dbt target (profiles.yml) and whether the backend runs `dbt deps` at start.
+  dbtTarget: ""
+  dbtDepsOnStart: false
+  # Anything else the backend reads that is not a secret (see .env.example in the repo):
+  #   AIRFLOW_URL: http://airflow-webserver.airflow.svc.cluster.local:8080
+  #   PORTAL_BASE_URL: https://portal.example.com
+  extra: {}
+
+# ── Secrets ─────────────────────────────────────────────────────────────────
+# Non-secret settings are above; every secret lives in ONE Kubernetes Secret.
+# Keys it must contain:
+#   JWT_SECRET, CUBE_API_SECRET, PORTAL_SECRET_KEY     always
+#   POSTGRES_PASSWORD                                  when postgresql.enabled
+#   DATABASE_URL  (postgresql+psycopg2://user:pw@host:5432/db)   when it is not
+#   REDIS_PASSWORD                                     when redis.enabled
+#   REDIS_URL     (redis://:pw@host:6379/0)            when it is not
+# Optional keys (any other env var the backend reads is passed through): DBT_PROJECT_GIT_TOKEN,
+# DBT_PKG_* / DATABRICKS_* warehouse logins, ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY,
+# AI_API_KEY, SMTP_PASSWORD, AIRFLOW_PASSWORD, AIRBYTE_CLIENT_SECRET, SEED_ADMIN_PASSWORD...
+secrets:
+  # true  (development): the chart creates the Secret from `values` below. Missing JWT_SECRET,
+  #       CUBE_API_SECRET, PORTAL_SECRET_KEY and bundled-service passwords are generated once and
+  #       kept across upgrades. The values pass through Helm: keep them out of git.
+  # false (production): the chart creates nothing and uses `existingSecret`, which you manage
+  #       (kubectl, External Secrets, Sealed Secrets, Vault, ...).
+  create: true
+  # Name of the Secret the chart creates (default: <release>-secrets).
+  name: ""
+  # Name of the Secret you manage (required when create is false).
+  existingSecret: ""
+  # create: true only. KEY: value, e.g. DATABASE_URL, REDIS_URL, DBT_PROJECT_GIT_TOKEN.
+  values: {}
+
+# ── Storage ─────────────────────────────────────────────────────────────────
+persistence:
+  # Keep the claims when the release is uninstalled (helm.sh/resource-policy: keep).
+  # Delete them yourself when you are sure: kubectl delete pvc -l app.kubernetes.io/instance=<release>
+  retainOnUninstall: true
+
+# The dbt project, shared by the backend (clones it, the dbt editor saves files) and every
+# worker (dbt runs here and writes target/, logs/, dbt_packages/). The SAME volume for both.
+# Pods on several nodes need ReadWriteMany (Azure Files, EFS, Filestore, NFS...). On a
+# single-node cluster ReadWriteOnce works, because every pod lands on the same node.
+workspace:
+  persistence:
+    existingClaim: ""
+    storageClass: ""        # "" = the cluster default, "-" = no class (static volumes)
+    accessModes: [ReadWriteMany]
+    size: 5Gi
+    annotations: {}
+
+# The portal's own files: the dbt editor's trash, the Cube model, the stored-credentials
+# key when PORTAL_SECRET_KEY is not set. Backend only: a ReadWriteOnce volume.
+data:
+  persistence:
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 1Gi
+    annotations: {}
+
+# The portal's own backups (a daily archive of the database and /data). Best on another
+# storage class than the data, or one the cluster's backups copy elsewhere.
+backups:
+  persistence:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 5Gi
+    annotations: {}
+
+# ── Backend: the portal API ─────────────────────────────────────────────────
+# One replica: the Cube model and (without PORTAL_SECRET_KEY) the credentials key are files
+# on its volume. Deployed with the Recreate strategy for that ReadWriteOnce volume.
+backend:
+  replicaCount: 1
+  image:
+    registry: ""            # "": imageRegistry
+    repository: capgemini-dbt-portal-backend
+    tag: ""                 # required (or digest)
+    digest: ""              # sha256:... (wins over tag)
+    pullPolicy: ""          # "": imagePullPolicy
+  strategy:
+    type: Recreate
+  # Proxies in front of the gateway that append to X-Forwarded-For (an Ingress, a TLS load
+  # balancer): the caller is that many entries before the last. null: 1 when the Ingress is
+  # enabled, else 0.
+  forwardedHops: null
+  service:
+    type: ClusterIP
+    port: 8000
+  # Prometheus scrape annotations (/metrics, internal only).
+  metrics:
+    annotations: true
+  extraEnv: []
+  podAnnotations: {}
+  podLabels: {}
+  terminationGracePeriodSeconds: 30
+  # uid 10001 is the image's appuser (USER appuser is not numeric, so Kubernetes needs it here).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  # Not read-only: the entrypoint and dbt write under the home directory, /tmp and /workspace.
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
+  resources:
+    requests: {cpu: 250m, memory: 768Mi}
+    limits: {memory: 2Gi}
+  # GET /api/health says the API process answers. It does not check PostgreSQL, Redis or Cube.
+  # startup: the entrypoint clones the project and runs dbt deps before uvicorn listens
+  # (up to periodSeconds x failureThreshold = 5 minutes).
+  probes:
+    startup: {enabled: true, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 60}
+    readiness: {enabled: true, periodSeconds: 15, timeoutSeconds: 5, failureThreshold: 3}
+    liveness: {enabled: true, periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 3}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+
+# ── Worker: runs the dbt jobs the backend queues (same image as the backend) ──
+worker:
+  replicaCount: 1
+  # dbt jobs one worker runs at once (WORKER_CONCURRENCY).
+  concurrency: 4
+  # Mount the backend's data claim at /data, as the Compose worker does. Off: that claim is
+  # ReadWriteOnce, which would tie every worker to the backend's node. Turn it on only with a
+  # ReadWriteMany data claim (data.persistence.accessModes), when something the backend keeps in
+  # /data must be seen by the workers (a project choice recorded there, a personal workspace).
+  mountData: false
+  extraEnv: []
+  podAnnotations: {}
+  podLabels: {}
+  # Lets a running dbt step finish on a rollout or scale-down.
+  terminationGracePeriodSeconds: 120
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
+  resources:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {memory: 4Gi}
+  # `python -m app.worker --check` exits 0 when Redis answers a PING: it shows the worker can
+  # reach its queue, not that its loop is alive. It starts Python, so the timeout is generous.
+  probes:
+    startup: {enabled: true, periodSeconds: 10, timeoutSeconds: 10, failureThreshold: 18}
+    liveness: {enabled: true, periodSeconds: 30, timeoutSeconds: 10, failureThreshold: 3}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+
+# ── Frontend: the SPA and the gateway (nginx). The only thing users reach. ────
+frontend:
+  replicaCount: 2
+  image:
+    registry: ""
+    repository: capgemini-dbt-portal-frontend
+    tag: ""
+    digest: ""
+    pullPolicy: ""
+  # ClusterIP is the default: reach it through the Ingress, or `kubectl port-forward`.
+  service:
+    type: ClusterIP
+    port: 8080
+    annotations: {}
+  # host:port of an Airflow webserver, served under /airflow-ui/ (optional).
+  airflowUpstream: ""
+  extraEnv: []
+  podAnnotations: {}
+  podLabels: {}
+  # USER 101 (nginx-unprivileged) is numeric: no uid is forced here. Not read-only: nginx
+  # renders its config into /etc/nginx/conf.d and writes /tmp at start.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+  probes:
+    startup: {enabled: true, periodSeconds: 5, timeoutSeconds: 3, failureThreshold: 12}
+    readiness: {enabled: true, periodSeconds: 15, timeoutSeconds: 3, failureThreshold: 3}
+    liveness: {enabled: true, periodSeconds: 30, timeoutSeconds: 3, failureThreshold: 3}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+
+# ── Cube: the semantic layer engine. Stateless; reads its model from the backend. ─
+cube:
+  replicaCount: 1
+  image:
+    registry: ""
+    repository: capgemini-dbt-portal-cube
+    tag: ""
+    digest: ""
+    pullPolicy: ""
+  service:
+    # Cube is never exposed outside the cluster by the chart.
+    type: ClusterIP
+    port: 4000
+    # Cube's SQL API (Postgres protocol, port 15432) for BI tools: not in the Service unless
+    # you ask. Even then it stays a ClusterIP Service; reaching it from outside the cluster is
+    # a deliberate, separate decision (see docs/KUBERNETES.md).
+    sql:
+      enabled: false
+      port: 15432
+  extraEnv: []
+  podAnnotations: {}
+  podLabels: {}
+  # The image runs as USER node (not numeric), so Kubernetes needs the uid: 1000 is `node` in
+  # the Node.js base image. Verify: docker run --rm --entrypoint id <cube image>
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+    capabilities:
+      drop: [ALL]
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {memory: 2Gi}
+  # /livez: Cube's process is up. /readyz: it can serve (readiness only).
+  probes:
+    startup: {enabled: true, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 24}
+    readiness: {enabled: true, periodSeconds: 15, timeoutSeconds: 5, failureThreshold: 3}
+    liveness: {enabled: true, periodSeconds: 30, timeoutSeconds: 5, failureThreshold: 3}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  priorityClassName: ""
+
+# ── Bundled PostgreSQL: development and basic testing ONLY ───────────────────
+# One pod, one disk: not highly available, not backed up by anything but the portal's own backups.
+# Production uses a managed database: leave this disabled and put DATABASE_URL in the Secret.
+postgresql:
+  enabled: false
+  image:
+    repository: docker.io/library/postgres
+    tag: "17-alpine"
+    pullPolicy: ""
+  # The database and user the chart creates. The password is the Secret key POSTGRES_PASSWORD
+  # (URL-safe characters only: it becomes part of DATABASE_URL).
+  auth:
+    username: portal
+    database: portal
+  persistence:
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 5Gi
+  # uid 70 is `postgres` in the Alpine image (change it together with the image).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 70
+    runAsGroup: 70
+    fsGroup: 70
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ── Legacy migration: pre-2026.11 databases, once, before the release ────────
+# Up to 2026.10 the portal kept two databases (portal_identity, portal_execution); it now has one
+# (portal). With this on, a Helm hook Job runs postgres/upgrade.sh (a copy: files/upgrade.sh)
+# before the release is installed or upgraded: it copies both into `portal`, keeps the old ones,
+# and does nothing on a new install or once moved, so it can stay on. Turn it on only for a database
+# that was used by the old portal. Compose does the same through its `upgrade` service.
+#   bundled PostgreSQL: runs on `helm upgrade`
+#   external database:  runs on `helm install` and `helm upgrade`; needs database.host and
+#                       passwordSecret (a Secret that exists already: the hook runs before the
+#                       chart creates its own). The target database must be called `portal`.
+legacyMigration:
+  enabled: false
+  image:
+    repository: docker.io/library/postgres
+    tag: "17-alpine"
+    pullPolicy: ""
+  database:
+    host: ""            # external database only (bundled: the chart's own service)
+    port: 5432
+    user: ""            # default: postgresql.auth.username
+  passwordSecret:
+    name: ""            # default: the chart's Secret (bundled only)
+    key: POSTGRES_PASSWORD
+  backoffLimit: 0
+  activeDeadlineSeconds: 900
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 70
+    runAsGroup: 70
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 512Mi}
+
+# ── Bundled Redis: development and basic testing ONLY ────────────────────────
+# Job queue, live logs, cache invalidation, e-mail sign-in codes. Password-protected.
+redis:
+  enabled: false
+  image:
+    repository: docker.io/library/redis
+    tag: "7-alpine"
+    pullPolicy: ""
+  # Nothing in Redis has to survive a restart (run history is in PostgreSQL; the job queue
+  # drains in milliseconds), so persistence is OFF: an emptyDir, no append-only file. true: a
+  # volume and the append-only file.
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes: [ReadWriteOnce]
+    size: 1Gi
+  # uid 999 / gid 1000 are `redis` in the Alpine image (change them together with the image).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 512Mi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ── Ingress: routes to the frontend only ────────────────────────────────────
+# Disabled, and no host is set: nothing is published until you configure it for your cluster.
+# The chart assumes no ingress controller: set className and the annotations it needs. The
+# dbt job-log WebSocket needs a read timeout of an hour or more on most controllers, e.g. for
+# ingress-nginx: nginx.ingress.kubernetes.io/proxy-read-timeout: "3600" (and proxy-send-timeout).
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # With no host, the rule matches every host name of the controller.
+  hosts: []
+  #  - host: portal.example.com
+  #    paths:
+  #      - path: /
+  #        pathType: Prefix
+  tls: []
+  #  - secretName: dbt-portal-tls
+  #    hosts: [portal.example.com]
+
+# ── NetworkPolicy (ingress side only) ───────────────────────────────────────
+# Needs a CNI that enforces NetworkPolicy. When enabled: the frontend accepts traffic from
+# frontend.from (empty: anywhere, which is what an Ingress controller needs), the backend only
+# from the frontend and Cube, Cube only from the backend, PostgreSQL and Redis only from the
+# backend and the workers, and the workers from nobody. Egress is not restricted (the backend
+# reaches Git, the warehouse and AI providers).
+networkPolicy:
+  enabled: false
+  # Peers allowed to reach the frontend, as NetworkPolicyPeer objects, e.g. the namespace of
+  # your ingress controller: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}]
+  frontendFrom: []
+  # Extra peers allowed to reach the backend (e.g. a Prometheus scraping /metrics).
+  backendFrom: []
+  # Peers allowed to reach Cube's SQL port when cube.service.sql.enabled.
+  cubeSqlFrom: []
+
+# ── PodDisruptionBudget (frontend and Cube, only when they run more than one replica) ──
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
