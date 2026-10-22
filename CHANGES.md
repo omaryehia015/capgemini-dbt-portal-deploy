@@ -2,7 +2,6 @@
 
 This file describes **everything** changed in the deployment work: the deploy repository
 (`capgemini-dbt-portal-deploy`) and the small change in the three component repositories.
-**Nothing is committed or pushed**; all of it is in the working trees, waiting for your review.
 
 Contents: [1. The goal](#1-the-goal) · [2. What was added](#2-what-was-added) ·
 [3. What was removed](#3-what-was-removed) · [4. How to use it](#4-how-to-use-it) ·
