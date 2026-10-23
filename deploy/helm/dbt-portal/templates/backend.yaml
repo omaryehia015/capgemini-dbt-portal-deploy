@@ -60,6 +60,11 @@ spec:
             - name: BACKUP_DIR
               value: /backups
             {{- end }}
+            {{- if not (kindIs "invalid" $v.processes) }}
+            # API processes in the pod (the image's default otherwise).
+            - name: WEB_CONCURRENCY
+              value: {{ $v.processes | toString | quote }}
+            {{- end }}
             # Proxies in front of the gateway that append to X-Forwarded-For (the Ingress).
             - name: FORWARDED_HOPS
               value: {{ (ternary (ternary 1 0 .Values.ingress.enabled) $v.forwardedHops (kindIs "invalid" $v.forwardedHops)) | toString | quote }}

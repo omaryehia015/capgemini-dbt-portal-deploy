@@ -158,6 +158,7 @@
         "image": {"$ref": "#/definitions/image"},
         "strategy": {"type": "object"},
         "forwardedHops": {"type": ["integer", "null"], "minimum": 0, "maximum": 5},
+        "processes": {"type": ["integer", "null"], "minimum": 1, "maximum": 32},
         "service": {
           "type": "object",
           "additionalProperties": false,

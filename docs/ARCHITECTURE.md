@@ -21,7 +21,7 @@ flowchart LR
 
 | Container | Image | Owns | Reads | Scales |
 |---|---|---|---|---|
-| **backend** | `-backend`, `EXECUTION_ROLE=api` | users, roles, sessions, audit trail, run history, schedules, alert settings (PostgreSQL); the dbt editor; the Cube warehouse login and data model (`/data/cube`) | the dbt project (read-write), its artifacts, the warehouse | one (more with a ReadWriteMany `/data`) |
+| **backend** | `-backend`, `EXECUTION_ROLE=api` | users, roles, sessions, audit trail, run history, schedules, alert settings (PostgreSQL); the dbt editor; the Cube warehouse login and data model (`/data/cube`) | the dbt project (read-write), its artifacts, the warehouse | one, with `WEB_CONCURRENCY` API processes (more containers with a ReadWriteMany `/data`) |
 | **worker** | `-backend`, `python -m app.worker` | the dbt processes; fires schedules | the dbt project (read-write) | one per N concurrent jobs |
 | **cube** | `-cube` | nothing | its configuration, from the backend | any number |
 | **frontend** | `-frontend` | nothing | — | any number |

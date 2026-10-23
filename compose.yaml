@@ -131,6 +131,9 @@ services:
       <<: *backend-env
       # Serve the API; dbt runs on the worker(s).
       EXECUTION_ROLE: api
+      # API processes, one CPU core each (API_PROCESSES in .env). Unset: the
+      # image's default, 2 in this stack.
+      WEB_CONCURRENCY: ${API_PROCESSES:-}
       CUBE_API_SECRET: "${CUBE_API_SECRET:?CUBE_API_SECRET is not set}"
       CUBE_API_URL: http://cube:4000
       # Backups (Users & Access > Backups): BACKUP_KEEP and BACKUP_INTERVAL_HOURS in .env.

@@ -172,9 +172,11 @@ No source checkout, no build, no Python/Node/dbt on their machine. If their
 infrastructure is Kubernetes, use path B with the same image tags.
 
 **Scaling on one host.** `./setup.sh --workers 3` (or `docker compose up -d --scale worker=3`)
-runs three dbt workers (each runs `WORKER_CONCURRENCY` jobs at once, 4 by default). `setup.sh`
-keeps the number in `.env` as `PORTAL_WORKERS`, which `manage.sh start`, an upgrade and the
-systemd service use. Everything else is sized for a team as is.
+runs three dbt workers (each runs `WORKER_CONCURRENCY` jobs at once, 4 by default; the others
+wait their turn, shown as queued). `setup.sh` keeps the number in `.env` as `PORTAL_WORKERS`,
+which `manage.sh start`, an upgrade and the systemd service use. The backend serves the API
+with `API_PROCESSES` processes (2 by default, one CPU core each): raise it in `.env` for a larger
+team, up to the host's cores minus one or two.
 
 **Upgrading from 2026.10 or earlier** (when identity, execution, insights and
 semantic ran as separate containers): run `setup.sh --release <newer>` as
@@ -267,8 +269,8 @@ scripts/portal.sh helm-install  --values deploy/helm/dbt-portal/values-prod.yaml
 What to know in short (details in KUBERNETES.md):
 
 - **What scales.** dbt runs on the **worker** Deployment (`worker.replicaCount`, `worker.concurrency`). The
-  backend runs one replica (it keeps the Cube model on a ReadWriteOnce volume); the frontend and Cube are
-  stateless.
+  backend runs one replica (it keeps the Cube model on a ReadWriteOnce volume) with `backend.processes`
+  API processes in it (2 by default, one CPU core each); the frontend and Cube are stateless.
 - **PostgreSQL and Redis.** Bundled pods exist for development only (`postgresql.enabled`, `redis.enabled`).
   Production uses managed services and puts `DATABASE_URL` / `REDIS_URL` in the Secret.
 - **Project source.** `project.source: git` (the backend clones into the shared workspace volume) or `volume`.
@@ -663,7 +665,10 @@ here by what they control; the backend's `app/core/config.py`,
 |---|---|---|
 | `EXECUTION_ROLE` | `all` | `api` (with `REDIS_URL`): the backend queues dbt runs for the workers instead of running them. Set in `compose.yaml` and the Helm chart's backend Deployment. |
 | `EXECUTION_ROLE` | `all` | Execution only. `api`: serve the API and queue dbt jobs for workers (needs `REDIS_URL`). `all`: run jobs in-process (single node). Workers run `python -m app.worker`. |
-| `WORKER_CONCURRENCY` | `4` | dbt jobs one worker runs at once. |
+| `WORKER_CONCURRENCY` | `4` | Jobs one worker (or the single-node backend) runs at once. The others wait their turn and show as **queued** in the run history; commands typed in a terminal never wait. A busy worker leaves new jobs to an idle one. |
+| `WEB_CONCURRENCY` | `2` with PostgreSQL, Redis and `EXECUTION_ROLE=api` (the full stack), else `1` | API processes in the backend container (`API_PROCESSES` in the client kit's `.env`). One Python process uses one CPU core: around 25 people working at once fill it. More than one needs PostgreSQL, Redis and `EXECUTION_ROLE=api`; otherwise the entrypoint keeps one process and says why in its log. Each process holds its own database pool (below) and memory (300-800 MB). |
+| `API_THREADS` | `40` | Threads per API process for blocking work (file reads, warehouse queries). |
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `10` / `15` | PostgreSQL connections per process, kept / opened on top when busy. Keep (API processes + workers) x (pool + overflow) under the server's `max_connections` (100 by default). |
 | `REDIS_URL` | — | Job queue, live job logs across replicas, cache invalidation, email sign-in codes. Unset: all in-process (single node only). |
 | `DATABASE_URL` | `sqlite:////data/portal.db` | The portal database (`postgresql+psycopg2://.../portal`), the same for backend and workers. SQLite is for a single node. Schema changes are applied on start (Alembic). |
 | `JWT_SECRET` | generated (single node only) | Session signing key, the same for every service. Also signs service-to-service calls. |
@@ -826,8 +831,10 @@ when its daemon starts; Podman does not, which is what the service is for.
 
 **Scaling.** Add workers for more concurrent dbt runs (`setup.sh --workers N`, `--scale worker=N`,
 or the chart's `worker.replicaCount`); each takes up to `WORKER_CONCURRENCY`
-jobs. The frontend and Cube are stateless and scale freely; the backend runs
-one replica unless its `/data` is on a ReadWriteMany volume. A job request waits up to 20 seconds for a worker; with none
+jobs, and the others wait their turn, queued. The frontend and Cube are
+stateless and scale freely; the backend runs one replica unless its `/data` is
+on a ReadWriteMany volume, and serves the API with `WEB_CONCURRENCY` processes
+inside it (one CPU core each). A job request waits up to 20 seconds for a worker; with none
 running, the page says "No execution worker picked up the job".
 
 **Schedules.** On the dbt Runner page, build a command, then *Schedules → Add

@@ -152,6 +152,9 @@ backend:
   # balancer): the caller is that many entries before the last. null: 1 when the Ingress is
   # enabled, else 0.
   forwardedHops: null
+  # API processes in the pod (WEB_CONCURRENCY), each up to one CPU core and ~800 MB.
+  # null: the image's default, 2 with this chart's PostgreSQL and Redis.
+  processes: null
   service:
     type: ClusterIP
     port: 8000
@@ -178,7 +181,7 @@ backend:
       drop: [ALL]
   resources:
     requests: {cpu: 250m, memory: 768Mi}
-    limits: {memory: 2Gi}
+    limits: {memory: 3Gi}
   # GET /api/health says the API process answers. It does not check PostgreSQL, Redis or Cube.
   # startup: the entrypoint clones the project and runs dbt deps before uvicorn listens
   # (up to periodSeconds x failureThreshold = 5 minutes).
