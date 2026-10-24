@@ -9,3 +9,9 @@ images:
     commit: 150418702defe1453ac3e957b4389726510fd475
     published: '2026-10-23T16:41:57Z'
     run: https://github.com/omaryehia015/capgemini-dbt-portal-backend/actions/runs/39988241778
+  frontend:
+    image: ghcr.io/omaryehia015/capgemini-dbt-portal-frontend
+    tag: prod-8c1446a5b2308d30687c7149253e68c5725cbdfb
+    commit: 8c1446a5b2308d30687c7149253e68c5725cbdfb
+    published: '2026-10-23T16:39:49Z'
+    run: https://github.com/omaryehia015/capgemini-dbt-portal-frontend/actions/runs/39988300180
