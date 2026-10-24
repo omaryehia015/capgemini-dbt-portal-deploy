@@ -1,4 +1,7 @@
-*.sh text eol=lf
-*.template text eol=lf
-# Windows batch files need CRLF, also when the release is built on Linux.
-*.cmd text eol=crlf
+*.template      text eol=lf
+*.sh            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+.env.example    text eol=lf
+*.ps1           text eol=crlf
+*.cmd           text eol=crlf
