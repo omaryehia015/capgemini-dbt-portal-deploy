@@ -45,11 +45,17 @@ env_out="$(bash "$here/release-tags.sh" "${tags_args[@]}" --format env)" || exit
 want() { printf '%s\n' "$env_out" | sed -n "s/^$1=//p"; }
 release="$(want PORTAL_RELEASE)"
 
+# Every file this script edits must exist before it edits any of them, so a failure leaves nothing
+# half-synced (and a checkout that is behind the branch carrying the Helm chart is named as such).
+env_file="$root/.env.example"
+chart="$root/deploy/helm/dbt-portal/Chart.yaml"
+for f in "$env_file" "$chart"; do
+    [[ -f "$f" ]] || { echo "sync-release: $f not found (is this checkout behind the branch that carries the Helm chart?)" >&2; exit 1; }
+done
+
 stale=()
 
 # .env.example: BACKEND_TAG, FRONTEND_TAG, CUBE_TAG.
-env_file="$root/.env.example"
-[[ -f "$env_file" ]] || { echo "sync-release: $env_file not found" >&2; exit 1; }
 env_stale=0
 for key in BACKEND FRONTEND CUBE; do
     current="$(sed -n "s/^${key}_TAG=//p" "$env_file" | head -n 1 | tr -d '\r')"
@@ -65,8 +71,6 @@ if [[ "$env_stale" == 1 ]]; then
 fi
 
 # Chart.yaml: appVersion is the portal release the chart was last aligned with.
-chart="$root/deploy/helm/dbt-portal/Chart.yaml"
-[[ -f "$chart" ]] || { echo "sync-release: $chart not found" >&2; exit 1; }
 app="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$chart" | head -n 1 | tr -d '\r')"
 if [[ "$app" != "$release" ]]; then
     stale+=("deploy/helm/dbt-portal/Chart.yaml")
